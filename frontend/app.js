@@ -160,6 +160,7 @@ function openModal(title, fields, handler, extraFooterHtml = "") {
 function closeModal() {
   document.getElementById("modal-overlay").classList.add("hidden");
   document.getElementById("modal-extra").innerHTML = "";
+  setSaveLabel("Save");
   onSubmit = null;
 }
 document.getElementById("modal-close").addEventListener("click", closeModal);
@@ -674,6 +675,129 @@ async function uploadOneImage(filename, bytes, type, supplierId) {
   return res.json();
 }
 
+// --------------------------------------------------------------------------- //
+// AI vision import — for image-only catalogs (slide/brochure PDFs with no text)
+// --------------------------------------------------------------------------- //
+let visionEnabled = false;
+fetch("/api/vision/config").then((r) => r.json()).then((c) => { visionEnabled = !!c.enabled; }).catch(() => {});
+
+function setSaveLabel(text) {
+  const b = document.querySelector("#modal-form button[type=submit]");
+  if (b) b.textContent = text;
+}
+
+// Render each PDF page to a compact JPEG blob (downscaled) using pdf.js.
+async function renderPdfPages(file, maxWidth = 1600) {
+  await ensurePdfJs();
+  const pdf = await pdfjsLib.getDocument({ data: await readFileAs(file, "buf") }).promise;
+  const blobs = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(1, maxWidth / base.width);
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    blobs.push(await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.82)));
+  }
+  return blobs;
+}
+
+async function visionExtractPage(blob) {
+  const fd = new FormData();
+  fd.append("file", new File([blob], "page.jpg", { type: "image/jpeg" }));
+  const res = await fetch("/api/vision/extract", { method: "POST", body: fd });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "AI extraction failed"); }
+  return res.json();
+}
+
+function productToRow(p, page) {
+  const a = {};
+  if (p.specification) a["Specification"] = p.specification;
+  if (p.color) a["Color"] = p.color;
+  if (p.material) a["Material"] = p.material;
+  if (p.features) a["Features"] = p.features;
+  if (p.usage_scenario) a["Usage Scenario"] = p.usage_scenario;
+  a["Source Page"] = String(page);
+  return { name: p.name, sku: null, unit: null, category: p.category || null,
+    description: p.features || null, unit_price: null, currency: "USD", min_quantity: 1,
+    source_row: page, supplier_name: null, supplier_info: {}, attributes: a };
+}
+
+async function resolveSupplierId(id, name) {
+  if (id) return +id;
+  const list = await api.get("/api/suppliers");
+  const s = list.find((x) => (x.name || "").trim().toLowerCase() === (name || "").trim().toLowerCase());
+  return s ? s.id : null;
+}
+
+// Full AI flow: render -> extract per page -> review -> (on Save) persist + store pages.
+async function runVisionFlow(file, supplier, renderSummary) {
+  showModalBusy("Rendering catalog pages…");
+  const pageBlobs = await renderPdfPages(file);
+  const rows = []; let detected = null; const keepPages = [];
+  for (let i = 0; i < pageBlobs.length; i++) {
+    showModalBusy(`Reading page ${i + 1} of ${pageBlobs.length} with AI…`);
+    let res;
+    try { res = await visionExtractPage(pageBlobs[i]); } catch (e) { res = { products: [] }; }
+    if (res.supplier_name && !detected) detected = res.supplier_name;
+    const found = (res.products || []).filter((p) => p && p.name);
+    found.forEach((p) => rows.push(productToRow(p, i + 1)));
+    if (found.length) keepPages.push({ page: i + 1, blob: pageBlobs[i] });
+  }
+
+  const supplierName = supplier.name || detected || file.name.replace(/\.pdf$/i, "");
+  if (!rows.length) {
+    document.getElementById("modal-title").textContent = "Nothing found";
+    document.getElementById("modal-fields").innerHTML =
+      `<p>The AI didn't find any products in this PDF — it may not be a product ` +
+      `catalog, or the pages are too low-resolution to read.</p>`;
+    setSaveLabel("Save");
+    onSubmit = async () => {};
+    return;
+  }
+
+  // Review step.
+  document.getElementById("modal-title").textContent = "Review extracted products";
+  const list = rows.slice(0, 40).map((r) =>
+    `<li>${esc(r.name)}${r.attributes.Material ? ` — <span class="muted">${esc(r.attributes.Material)}</span>` : ""}</li>`).join("");
+  const more = rows.length > 40 ? `<li>…and ${rows.length - 40} more</li>` : "";
+  document.getElementById("modal-fields").innerHTML = `
+    <p><strong>${rows.length}</strong> product(s) found across ${keepPages.length} page(s),
+       supplier <strong>${esc(supplierName)}</strong>.</p>
+    <p class="muted">Review below, then save. You can edit or delete items afterwards.</p>
+    <ul class="errs">${list}${more}</ul>`;
+  setSaveLabel(`Save ${rows.length} products`);
+
+  // On the next Save click, persist rows + store the source pages as collateral.
+  onSubmit = async () => {
+    const eff = { id: supplier.id || null, name: supplier.id ? null : supplierName };
+    showModalBusy("Saving products to the catalog…");
+    const summary = await importRowsBatched("catalog-import/rows", eff, { rows, warnings: [] });
+    const supId = await resolveSupplierId(supplier.id, supplierName);
+    let stored = 0;
+    if (supId) {
+      for (let i = 0; i < keepPages.length; i++) {
+        showModalBusy(`Saving catalog pages… (${i + 1}/${keepPages.length})`);
+        const fd = new FormData();
+        fd.append("file", new File([keepPages[i].blob], `page-${keepPages[i].page}.jpg`, { type: "image/jpeg" }));
+        fd.append("supplier_id", supId);
+        const r = await fetch("/api/documents", { method: "POST", body: fd });
+        if (r.ok) stored++;
+      }
+    }
+    summary.images_attached = (summary.images_attached || 0) + stored;
+    document.getElementById("modal-title").textContent = "Import Complete";
+    document.getElementById("modal-fields").innerHTML = renderSummary(summary);
+    document.getElementById("modal-extra").innerHTML = "";
+    setSaveLabel("Save");
+    onSubmit = async () => {};
+    loadCatalog(); refreshCounts();
+    return false;
+  };
+}
+
 function warningList(warnings) {
   if (!warnings || !warnings.length) return "";
   const items = warnings.slice(0, 20).map((w) => `<li>Row ${w.row}: ${esc(w.warning)}</li>`).join("");
@@ -706,6 +830,16 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
       summary = await runImageImport(file, supplier.id);
     } else {
       const parsed = await parseCatalogFile(file);
+      // Image-only PDF (no text layer): switch to AI vision extraction.
+      const isPdf = /\.pdf$/i.test(file.name);
+      if (kind === "catalog" && isPdf && !parsed.rows.length) {
+        if (!visionEnabled) {
+          throw new Error("This PDF has no readable text — it's image-based. AI extraction "
+            + "isn't enabled (set ANTHROPIC_API_KEY on the server), so please upload a CSV/Excel.");
+        }
+        await runVisionFlow(file, supplier, renderSummary);
+        return false;  // runVisionFlow drives its own review → save → summary
+      }
       const action = kind === "catalog" ? "catalog-import/rows" : "quotation-import/rows";
       summary = await importRowsBatched(action, supplier, parsed);
       if (kind === "catalog" && parsed.images && parsed.images.length) {
@@ -780,7 +914,7 @@ document.getElementById("import-catalog").addEventListener("click", async () => 
     kind: "catalog",
     supplierMode: "name",
     accept: ".csv,.xlsx,.pdf",
-    fileLabel: "Catalog file (.csv, .xlsx, .pdf) — any size",
+    fileLabel: "Catalog file (.csv, .xlsx, .pdf) — any size. Image-only PDFs are read by AI.",
     extraFooter: `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`,
     renderSummary: (s) => `
       <p><strong>${s.rows_captured}</strong> row(s) captured —

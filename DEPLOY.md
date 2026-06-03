@@ -51,6 +51,25 @@ is an isolated change — ask and it can be added.
 Also use Vercel Postgres' **pooled** connection string (the default `POSTGRES_URL`)
 since serverless functions open many short-lived connections.
 
+## AI extraction for image-only catalogs (optional)
+Some supplier catalogs are **image-only PDFs** (slide/brochure exports with no
+text layer). These can't be parsed as text, so the app reads them with Claude
+vision instead. To enable it:
+
+1. Get an **Anthropic API key** (https://console.anthropic.com).
+2. In Vercel → your project → **Settings → Environment Variables**, add:
+   - `ANTHROPIC_API_KEY` = your key
+   - *(optional)* `VISION_MODEL` = `claude-sonnet-4-6` (default; set
+     `claude-haiku-4-5-20251001` for lower cost, `claude-opus-4-8` for best accuracy)
+3. **Redeploy.**
+
+Then **Import Catalog** with an image PDF: the app renders each page, the AI
+extracts the products (name, specification, color, material, features) and the
+company/supplier name, you review the list, and on save the products are added
+and the source pages stored as collateral. Each page is sent to the server one
+at a time, so file size isn't a constraint. Cost is roughly a few cents to a
+small fraction of a dollar per catalog depending on the model and page count.
+
 ## Locking it down later
 The link is currently open to anyone who has it. To add a single shared password
 (no per-user accounts), this can be done with a small middleware + a login screen —

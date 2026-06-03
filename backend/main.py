@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.database import init_db
-from backend.routers import catalog, documents, imports, quotes, suppliers
+from backend.routers import catalog, documents, imports, quotes, suppliers, vision
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
@@ -41,6 +41,7 @@ app.include_router(catalog.router)
 app.include_router(quotes.router)
 app.include_router(documents.router)
 app.include_router(imports.router)
+app.include_router(vision.router)
 
 
 @app.get("/api/health", tags=["health"])
