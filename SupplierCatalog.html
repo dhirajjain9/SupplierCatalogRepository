@@ -499,8 +499,19 @@ const HEADER_ALIASES={
 };
 const ALIAS_TO_FIELD={};Object.entries(HEADER_ALIASES).forEach(([f,al])=>al.forEach(a=>ALIAS_TO_FIELD[a]=f));
 const canonicalHeader=h=>h==null?null:(ALIAS_TO_FIELD[String(h).trim().toLowerCase()]||null);
+// Supplier columns a file may carry, so the supplier is created automatically.
+const SUPPLIER_ALIASES={
+  name:["supplier","supplier name","vendor","vendor name","manufacturer","brand","company","seller","supplier/vendor"],
+  email:["supplier email","vendor email","supplier e-mail"],
+  phone:["supplier phone","vendor phone","supplier contact number","supplier mobile"],
+  contact_name:["supplier contact","contact person","sales contact","contact name"],
+  category:["supplier category","supplier type"],address:["supplier address","vendor address"],
+};
+const SUPPLIER_ALIAS_TO_FIELD={};Object.entries(SUPPLIER_ALIASES).forEach(([f,al])=>al.forEach(a=>SUPPLIER_ALIAS_TO_FIELD[a]=f));
+const supplierHeader=h=>h==null?null:(SUPPLIER_ALIAS_TO_FIELD[String(h).trim().toLowerCase()]||null);
+const SUPPLIER_FIELDS=["email","phone","contact_name","category","address"];
 const cleanCell=v=>{if(v==null)return null;const s=String(v).trim();return s||null;};
-const TEMPLATE_HEADERS=["Name","SKU","Unit","Category","Description","Unit Price","Currency","Min Quantity"];
+const TEMPLATE_HEADERS=["Supplier","Name","SKU","Unit","Category","Description","Unit Price","Currency","Min Quantity"];
 
 function labelHeaders(headers){const labels=[],seen={};
   headers.forEach((h,idx)=>{let base=cleanCell(h)||("Column "+(idx+1));
@@ -512,6 +523,8 @@ function normalizeRows(headers,rawRows){
   const labels=labelHeaders(headers);
   const colMap={};const used=new Set();
   headers.forEach((h,idx)=>{const c=canonicalHeader(h);if(c&&!used.has(c)){colMap[idx]=c;used.add(c);}});
+  const supMap={};const supUsed=new Set();
+  headers.forEach((h,idx)=>{const c=supplierHeader(h);if(c&&!supUsed.has(c)){supMap[idx]=c;supUsed.add(c);}});
   rawRows.forEach((raw,offset)=>{
     const rowNo=offset+2;
     const attributes={};
@@ -524,7 +537,9 @@ function normalizeRows(headers,rawRows){
       if(used.has("name"))result.warnings.push({row:rowNo,warning:`Missing name; using "${name}"`});}
     const row={name,sku:values.sku||null,unit:values.unit||null,category:values.category||null,
       description:values.description||null,unit_price:null,currency:"USD",min_quantity:1,
-      source_row:rowNo,attributes};
+      source_row:rowNo,attributes,supplier_name:null,supplier_info:{}};
+    Object.entries(supMap).forEach(([idx,f])=>{const val=+idx<raw.length?cleanCell(raw[+idx]):null;
+      if(!val)return; if(f==="name")row.supplier_name=val; else row.supplier_info[f]=val;});
     if(values.unit_price!=null){
       const cleaned=values.unit_price.replace(/,/g,"").replace(/^[$€£\s]+/,"").trim();
       const price=parseFloat(cleaned);
@@ -566,14 +581,42 @@ const ctForName=n=>({".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png"
 function skuCandidates(filename){const stem=(filename.split("/").pop()||filename).replace(/\.[^.]+$/,"").trim();
   const out=[stem];const base=stem.replace(/_\d+$/,"");if(base&&base!==stem)out.push(base);return out;}
 
-async function importCatalog(supplierId,parsed){
-  let created=0,updated=0,quotes=0,imagesAttached=0;const rowToItem={};
-  const existing=await itemsForSupplier(supplierId);
+// Find-or-create suppliers by name during an import; caches + counts new ones.
+async function makeResolver(defaultSupplierId,defaultSupplierName){
+  const all=await Suppliers.all();const cache=new Map();let created=0,dflt=null;
+  const byName=n=>all.find(s=>(s.name||"").trim().toLowerCase()===n.trim().toLowerCase());
+  if(defaultSupplierId)dflt=await Suppliers.get(+defaultSupplierId);
+  else if(defaultSupplierName&&defaultSupplierName.trim()){
+    dflt=byName(defaultSupplierName)||null;
+    if(!dflt){dflt={name:defaultSupplierName.trim()};dflt.id=await Suppliers.add(dflt);all.push(dflt);created++;}}
+  if(dflt)cache.set(dflt.name.trim().toLowerCase(),dflt);
+  return {
+    get created(){return created;}, default:dflt,
+    async resolve(name,info){
+      name=(name||"").trim();if(!name)return dflt;
+      const key=name.toLowerCase();
+      let sup=cache.get(key)||byName(name);
+      if(!sup){sup={name};SUPPLIER_FIELDS.forEach(f=>{if(info&&info[f])sup[f]=info[f];});
+        sup.id=await Suppliers.add(sup);all.push(sup);created++;}
+      else if(info){let dirty=false;SUPPLIER_FIELDS.forEach(f=>{if(info[f]&&!sup[f]){sup[f]=info[f];dirty=true;}});if(dirty)await Suppliers.put(sup);}
+      cache.set(key,sup);return sup;
+    }};
+}
+
+async function importCatalog(opts,parsed){
+  const hasFileSupplier=parsed.rows.some(r=>r.supplier_name);
+  const resolver=await makeResolver(opts.supplierId,opts.supplierName);
+  if(!resolver.default&&!hasFileSupplier)
+    throw new Error("No supplier found. Add a “Supplier” column to your file, or choose/enter a supplier.");
+  let created=0,updated=0,quotes=0,imagesAttached=0;const rowToItem={};const warnings=[...parsed.warnings];
+  const allItems=await Items.all();
   for(const row of parsed.rows){
-    let item=row.sku?existing.find(i=>i.sku===row.sku):null;
-    if(!item){item={supplier_id:supplierId,name:row.name,sku:row.sku,unit:row.unit,
+    const supplier=await resolver.resolve(row.supplier_name,row.supplier_info);
+    if(!supplier){warnings.push({row:row.source_row,warning:"No supplier for this row; skipped"});continue;}
+    let item=row.sku?allItems.find(i=>i.supplier_id===supplier.id&&i.sku===row.sku):null;
+    if(!item){item={supplier_id:supplier.id,name:row.name,sku:row.sku,unit:row.unit,
         category:row.category,description:row.description,attributes:row.attributes};
-      item.id=await Items.add(item);existing.push(item);created++;}
+      item.id=await Items.add(item);allItems.push(item);created++;}
     else{item.name=row.name;item.unit=row.unit;item.category=row.category;
       item.description=row.description;item.attributes=row.attributes;await Items.put(item);updated++;}
     rowToItem[row.source_row]=item;
@@ -582,18 +625,21 @@ async function importCatalog(supplierId,parsed){
   }
   for(const img of parsed.images||[]){const item=rowToItem[img.row];if(!item)continue;
     const blob=new Blob([img.bytes],{type:img.type});
-    await Documents.add({supplier_id:supplierId,catalog_item_id:item.id,filename:"image_row"+img.row+"."+(img.type.split("/")[1]||"png"),
+    await Documents.add({supplier_id:item.supplier_id,catalog_item_id:item.id,filename:"image_row"+img.row+"."+(img.type.split("/")[1]||"png"),
       content_type:img.type,size_bytes:blob.size,kind:"image",blob});imagesAttached++;}
-  return {rows_captured:parsed.rows.length,items_created:created,items_updated:updated,
-    quotes_created:quotes,images_attached:imagesAttached,rows_with_warnings:parsed.warnings.length,warnings:parsed.warnings};
+  return {rows_captured:parsed.rows.length,items_created:created,items_updated:updated,quotes_created:quotes,
+    suppliers_created:resolver.created,images_attached:imagesAttached,rows_with_warnings:warnings.length,warnings};
 }
 
-async function importQuotation(supplierId,parsed){
+async function importQuotation(opts,parsed){
   let quotes=0,unmatched=0,noPrice=0;const matched=new Set();const warnings=[...parsed.warnings];
-  const existing=await itemsForSupplier(supplierId);
+  const all=await Suppliers.all();const allItems=await Items.all();
+  const byName=n=>all.find(s=>(s.name||"").trim().toLowerCase()===(n||"").trim().toLowerCase());
+  const dflt=opts.supplierId?+opts.supplierId:(opts.supplierName?((byName(opts.supplierName)||{}).id):null);
   for(const row of parsed.rows){
     if(!row.sku){unmatched++;warnings.push({row:row.source_row,warning:"No SKU; cannot match to catalog"});continue;}
-    const item=existing.find(i=>i.sku===row.sku);
+    const scopeId=row.supplier_name?((byName(row.supplier_name)||{}).id):dflt;
+    const item=allItems.find(i=>i.sku===row.sku&&(scopeId==null||i.supplier_id===scopeId));
     if(!item){unmatched++;warnings.push({row:row.source_row,warning:`SKU "${row.sku}" not in catalog`});continue;}
     if(!row.has_price){noPrice++;warnings.push({row:row.source_row,warning:`SKU "${row.sku}": no price to quote`});continue;}
     await Quotes.add({catalog_item_id:item.id,unit_price:row.unit_price,currency:row.currency,
@@ -603,7 +649,7 @@ async function importQuotation(supplierId,parsed){
   return {quotes_created:quotes,items_matched:matched.size,rows_unmatched:unmatched,rows_without_price:noPrice,warnings};
 }
 
-async function importImages(supplierId,file){
+async function importImages(opts,file){
   const name=(file.name||"").toLowerCase();let entries=[],skipped=[];
   if(name.endsWith(".zip")){const z=await unzip(await readFile(file,"buf"));
     for(const [fn,bytes] of Object.entries(z)){const base=fn.split("/").pop();
@@ -612,13 +658,15 @@ async function importImages(supplierId,file){
       else skipped.push(base);}}
   else if(isImageName(name)){entries.push({filename:file.name,bytes:new Uint8Array(await readFile(file,"buf")),type:file.type||ctForName(name)});}
   else throw new Error("Upload a .zip of images or a single image file (.jpg/.png/…).");
-  const existing=await itemsForSupplier(supplierId);
+  const scopeId=opts.supplierId?+opts.supplierId:null;
+  const allItems=await Items.all();
   let stored=0;const unmatched=[];
   for(const e of entries){
-    let item=null;for(const sku of skuCandidates(e.filename)){item=existing.find(i=>i.sku===sku);if(item)break;}
+    let item=null;for(const sku of skuCandidates(e.filename)){
+      item=allItems.find(i=>i.sku===sku&&(scopeId==null||i.supplier_id===scopeId));if(item)break;}
     if(!item){unmatched.push(e.filename);continue;}
     const blob=new Blob([e.bytes],{type:e.type});
-    await Documents.add({supplier_id:supplierId,catalog_item_id:item.id,filename:e.filename,
+    await Documents.add({supplier_id:item.supplier_id,catalog_item_id:item.id,filename:e.filename,
       content_type:e.type,size_bytes:blob.size,kind:"image",blob});stored++;}
   return {images_stored:stored,images_unmatched:unmatched,files_skipped:skipped};
 }
@@ -790,37 +838,42 @@ function warningList(warnings){if(!warnings||!warnings.length)return"";
   const items=warnings.slice(0,20).map(w=>`<li>Row ${w.row}: ${esc(w.warning)}</li>`).join("");
   const more=warnings.length>20?`<li>…and ${warnings.length-20} more</li>`:"";
   return `<ul class="errs">${items}${more}</ul>`;}
-function openUploadModal({title,kind,accept,fileLabel,renderSummary,extraFooter}){
-  openModal(title,[
-    {name:"supplier_id",label:"Supplier",type:"select",required:true,options:suppliersCache.map(s=>({value:s.id,label:s.name}))},
-    {name:"file",label:fileLabel,type:"file",required:true,accept},
-  ],async(v,form)=>{
+// Supplier is OPTIONAL: resolved from a file "Supplier" column or chosen/typed
+// here. supplierMode "name" shows the existing-picker + a new-name field.
+function openUploadModal({title,kind,accept,fileLabel,renderSummary,extraFooter,supplierMode}){
+  const fields=[{name:"supplier_id",label:"Supplier (optional)",type:"select",
+    options:[{value:"",label:"— Auto-detect from file —"}].concat(suppliersCache.map(s=>({value:s.id,label:s.name})))}];
+  if(supplierMode==="name")fields.push({name:"supplier_name",label:"…or new supplier name (optional)"});
+  fields.push({name:"file",label:fileLabel,type:"file",required:true,accept});
+  openModal(title,fields,async(v,form)=>{
     const fi=form.querySelector('input[name="file"]');if(!fi.files.length)throw new Error("Please choose a file");
-    const supplierId=+v.supplier_id;const file=fi.files[0];let summary;
-    if(kind==="catalog")summary=await importCatalog(supplierId,await parseCatalogFile(file));
-    else if(kind==="quotation")summary=await importQuotation(supplierId,await parseCatalogFile(file));
-    else summary=await importImages(supplierId,file);
+    const opts={supplierId:v.supplier_id||null,supplierName:(v.supplier_name||"").trim()||null};
+    const file=fi.files[0];let summary;
+    if(kind==="catalog")summary=await importCatalog(opts,await parseCatalogFile(file));
+    else if(kind==="quotation")summary=await importQuotation(opts,await parseCatalogFile(file));
+    else summary=await importImages(opts,file);
     document.getElementById("modal-title").textContent="Import Complete";
     document.getElementById("modal-extra").innerHTML="";
     document.getElementById("modal-fields").innerHTML=renderSummary(summary);
-    onSubmit=async()=>{};loadCatalog();return false;
+    onSubmit=async()=>{};loadCatalog();refreshCounts();return false;
   },extraFooter||"");
 }
 document.getElementById("import-catalog").addEventListener("click",async()=>{
-  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
-  openUploadModal({title:"Import Catalog",kind:"catalog",accept:".csv,.xlsx,.pdf",
+  await ensureSuppliers();
+  openUploadModal({title:"Import Catalog",kind:"catalog",supplierMode:"name",accept:".csv,.xlsx,.pdf",
     fileLabel:"Catalog file (.csv, .xlsx, .pdf)",
     extraFooter:`<button type="button" class="btn link" id="dl-template">Download CSV template</button>`,
     renderSummary:s=>`<p><strong>${s.rows_captured}</strong> row(s) captured —
       <strong>${s.items_created}</strong> created, <strong>${s.items_updated}</strong> updated,
-      <strong>${s.quotes_created}</strong> quotes, <strong>${s.images_attached||0}</strong> images.</p>
-      <p class="muted">Every column from the file is stored on each item.</p>
+      <strong>${s.quotes_created}</strong> quotes, <strong>${s.images_attached||0}</strong> images${
+        s.suppliers_created?`, <strong>${s.suppliers_created}</strong> new supplier(s)`:""}.</p>
+      <p class="muted">Tip: include a “Supplier” column to file items under different suppliers.</p>
       ${s.rows_with_warnings?`<p>${s.rows_with_warnings} row(s) imported with warnings:</p>${warningList(s.warnings)}`:`<p>No warnings. 🎉</p>`}`});
   setTimeout(()=>{const b=document.getElementById("dl-template");if(b)b.onclick=downloadTemplate;},0);
 });
 document.getElementById("import-quotation").addEventListener("click",async()=>{
-  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
-  openUploadModal({title:"Import Quotation (Step 2)",kind:"quotation",accept:".csv,.xlsx,.pdf",
+  await ensureSuppliers();
+  openUploadModal({title:"Import Quotation (Step 2)",kind:"quotation",supplierMode:"name",accept:".csv,.xlsx,.pdf",
     fileLabel:"Quotation file with SKU + price + MOQ",
     renderSummary:s=>`<p><strong>${s.quotes_created}</strong> quote(s) recorded across
       <strong>${s.items_matched}</strong> catalog item(s).</p>
@@ -828,8 +881,8 @@ document.getElementById("import-quotation").addEventListener("click",async()=>{
       ${(s.rows_unmatched||s.rows_without_price)?`<p>${s.rows_unmatched} unmatched, ${s.rows_without_price} without a price:</p>${warningList(s.warnings)}`:`<p>All rows matched. 🎉</p>`}`});
 });
 document.getElementById("import-images").addEventListener("click",async()=>{
-  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
-  openUploadModal({title:"Import Product Images",kind:"images",accept:".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
+  await ensureSuppliers();
+  openUploadModal({title:"Import Product Images",kind:"images",supplierMode:"scope",accept:".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
     fileLabel:"A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
     renderSummary:s=>{const u=(s.images_unmatched||[]).map(f=>`<li>${esc(f)}</li>`).join("");
       const sk=(s.files_skipped||[]).map(f=>`<li>${esc(f)}</li>`).join("");
@@ -839,7 +892,7 @@ document.getElementById("import-images").addEventListener("click",async()=>{
         ${!u&&!sk?`<p>All images matched. 🎉</p>`:""}`;}});
 });
 function downloadTemplate(){
-  const csv=[TEMPLATE_HEADERS.join(","),["Resistor 10k","R10K","each","Passives","1/4W 5% carbon film","0.05","USD","1000"].join(",")].join("\n");
+  const csv=[TEMPLATE_HEADERS.join(","),["Acme Components","Resistor 10k","R10K","each","Passives","1/4W 5% carbon film","0.05","USD","1000"].join(",")].join("\n");
   const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
   a.download="catalog-template.csv";a.click();
 }
