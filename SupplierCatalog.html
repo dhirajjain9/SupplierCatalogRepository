@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="theme-color" content="#fbfbfd" />
+<title>Supplier Catalog</title>
+<style>
+/* =========================================================================
+   Supplier Catalog — Apple-inspired design system (single-file, in-browser)
+   ========================================================================= */
+:root{
+  --bg:#fbfbfd;--surface:#fff;--surface-2:#f5f5f7;--elevated:rgba(255,255,255,.72);
+  --text:#1d1d1f;--muted:#6e6e73;--faint:#86868b;--border:rgba(0,0,0,.08);
+  --border-strong:rgba(0,0,0,.14);--accent:#0071e3;--accent-hover:#0077ed;
+  --accent-press:#006edb;--accent-soft:rgba(0,113,227,.1);--danger:#ff3b30;
+  --danger-soft:rgba(255,59,48,.1);--success:#34c759;
+  --radius-sm:8px;--radius:14px;--radius-lg:20px;--pill:980px;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.04),0 1px 3px rgba(0,0,0,.06);
+  --shadow-md:0 4px 16px rgba(0,0,0,.06),0 1px 4px rgba(0,0,0,.04);
+  --shadow-lg:0 24px 60px rgba(0,0,0,.2),0 8px 24px rgba(0,0,0,.12);
+  --ease:cubic-bezier(.4,0,.2,1);--space:32px;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#000;--surface:#1c1c1e;--surface-2:#2c2c2e;--elevated:rgba(28,28,30,.72);
+  --text:#f5f5f7;--muted:#a1a1a6;--faint:#8e8e93;--border:rgba(255,255,255,.1);
+  --border-strong:rgba(255,255,255,.18);--accent:#0a84ff;--accent-hover:#409cff;
+  --accent-press:#0a84ff;--accent-soft:rgba(10,132,255,.16);--danger:#ff453a;
+  --danger-soft:rgba(255,69,58,.16);
+  --shadow-lg:0 24px 60px rgba(0,0,0,.6),0 8px 24px rgba(0,0,0,.4);
+}}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.47;letter-spacing:-.01em;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+::selection{background:var(--accent-soft)}
+.topbar{position:sticky;top:0;z-index:40;background:var(--elevated);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--border);padding:16px var(--space)}
+.brand{display:flex;align-items:center;gap:14px;max-width:1180px;margin:0 auto}
+.logo{width:40px;height:40px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(150deg,var(--accent),#34aadc);border-radius:11px;color:#fff;box-shadow:var(--shadow-sm)}
+.logo svg{width:22px;height:22px}
+.topbar h1{font-size:19px;font-weight:600;letter-spacing:-.02em}
+.subtitle{color:var(--muted);font-size:13px;letter-spacing:0}
+.brand .spacer{flex:1}
+.tabs{position:sticky;top:73px;z-index:30;display:flex;gap:2px;margin:0 auto;padding:10px var(--space) 0;max-width:1180px}
+.tabs-inner{display:inline-flex;gap:2px;padding:3px;background:var(--surface-2);border-radius:var(--pill);box-shadow:inset 0 0 0 1px var(--border)}
+.tab{background:none;border:none;cursor:pointer;padding:7px 18px;font-size:13.5px;font-weight:500;
+  color:var(--muted);border-radius:var(--pill);transition:color .2s var(--ease),background .2s var(--ease),box-shadow .2s var(--ease);white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--text);background:var(--surface);box-shadow:var(--shadow-sm)}
+.tab .count{margin-left:7px;font-size:11px;font-weight:600;color:var(--faint)}
+.tab.active .count{color:var(--accent)}
+main{padding:26px var(--space) 64px;max-width:1180px;margin:0 auto}
+.panel{display:none;animation:fade-up .4s var(--ease)}
+.panel.active{display:block}
+@keyframes fade-up{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.panel-head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:20px;flex-wrap:wrap;gap:14px}
+.panel-head h2{font-size:28px;font-weight:600;letter-spacing:-.03em}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input,select,textarea{font:inherit;padding:9px 13px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--text);outline:none;transition:border-color .2s var(--ease),box-shadow .2s var(--ease)}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
+select{-webkit-appearance:none;appearance:none;padding-right:30px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center}
+input[type=search]{min-width:240px}
+.btn{cursor:pointer;padding:8px 16px;border-radius:var(--pill);border:1px solid var(--border-strong);
+  background:var(--surface);font:inherit;font-size:13.5px;font-weight:500;color:var(--text);
+  display:inline-flex;align-items:center;gap:6px;
+  transition:background .18s var(--ease),border-color .18s var(--ease),transform .08s var(--ease),box-shadow .18s var(--ease)}
+.btn svg{width:15px;height:15px}
+.btn:hover{background:var(--surface-2)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);color:#fff;border-color:transparent;box-shadow:var(--shadow-sm)}
+.btn.primary:hover{background:var(--accent-hover)}
+.btn.primary:active{background:var(--accent-press)}
+.btn.danger-text{color:var(--danger);border:none;background:none;padding:6px 10px}
+.btn.danger-text:hover{background:var(--danger-soft)}
+.btn.link{color:var(--accent);border:none;background:none;padding:6px 10px;font-weight:500}
+.btn.link:hover{background:var(--accent-soft)}
+.icon-btn{background:none;border:none;cursor:pointer;color:var(--muted);width:30px;height:30px;
+  border-radius:50%;display:grid;place-items:center;transition:background .18s var(--ease),color .18s var(--ease)}
+.icon-btn:hover{background:var(--surface-2);color:var(--text)}
+.icon-btn svg{width:16px;height:16px}
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-md)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:13px 18px;font-size:14px;vertical-align:middle}
+th{background:var(--surface-2);color:var(--faint);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+tbody tr{border-top:1px solid var(--border);transition:background .15s var(--ease)}
+tbody tr:hover{background:var(--surface-2)}
+tbody td:first-child{font-weight:500}
+.right{text-align:right}
+td.right{white-space:nowrap}
+.empty{text-align:center;color:var(--muted);padding:56px 24px}
+.empty svg{width:40px;height:40px;color:var(--faint);margin-bottom:12px;opacity:.7}
+.empty .empty-title{font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px}
+.empty .empty-sub{font-size:13.5px}
+.skeleton-row td{padding:16px 18px}
+.skeleton{height:13px;border-radius:6px;background:linear-gradient(90deg,var(--surface-2) 25%,var(--border) 37%,var(--surface-2) 63%);
+  background-size:400% 100%;animation:shimmer 1.4s ease infinite}
+@keyframes shimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
+.modal-overlay{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.32);
+  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:20px;animation:overlay-in .25s var(--ease)}
+@keyframes overlay-in{from{opacity:0}to{opacity:1}}
+.modal-overlay.hidden{display:none}
+.modal{background:var(--surface);border-radius:var(--radius-lg);width:500px;max-width:100%;max-height:88vh;overflow-y:auto;box-shadow:var(--shadow-lg);animation:modal-in .32s var(--ease)}
+@keyframes modal-in{from{opacity:0;transform:translateY(16px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.modal-head{display:flex;justify-content:space-between;align-items:center;padding:20px 24px 16px}
+.modal-head h3{font-size:19px;font-weight:600;letter-spacing:-.02em}
+#modal-fields{padding:4px 24px 8px;display:flex;flex-direction:column;gap:15px}
+#modal-fields p{font-size:14px}
+#modal-fields p strong{font-weight:600}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:13px;font-weight:500;color:var(--muted)}
+.field input,.field select,.field textarea{width:100%}
+.field textarea{resize:vertical;min-height:64px}
+.field input[type=file]{padding:9px;background:var(--surface-2);border-style:dashed;cursor:pointer}
+.modal-foot{display:flex;align-items:center;gap:10px;padding:16px 24px 22px}
+.modal-foot .spacer{flex:1}
+#modal-fields .errs{margin:4px 0 0;padding:12px 14px;list-style:none;background:var(--surface-2);
+  border-radius:var(--radius-sm);color:var(--muted);font-size:13px;max-height:220px;overflow-y:auto}
+#modal-fields .errs li{margin-bottom:4px}
+#modal-fields .errs li:last-child{margin-bottom:0}
+#modal-fields .muted{color:var(--muted);font-size:13px}
+table.attrs{width:100%;border-collapse:collapse;font-size:14px}
+table.attrs th,table.attrs td{padding:9px 0;border-bottom:1px solid var(--border);text-transform:none;letter-spacing:0;background:none}
+table.attrs th{text-align:left;color:var(--muted);white-space:nowrap;vertical-align:top;font-weight:500;font-size:13px;padding-right:16px;width:40%}
+table.attrs tr:last-child th,table.attrs tr:last-child td{border-bottom:none}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
+.gallery a{display:block;transition:transform .2s var(--ease)}
+.gallery a:hover{transform:scale(1.03)}
+.gallery img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border);display:block;box-shadow:var(--shadow-sm)}
+.thumb{width:38px;height:38px;border-radius:9px;object-fit:cover;border:1px solid var(--border);vertical-align:middle;background:var(--surface-2)}
+.thumb-ph{display:inline-grid;place-items:center;color:var(--faint)}
+.thumb-ph svg{width:18px;height:18px}
+.cell-with-thumb{display:flex;align-items:center;gap:11px}
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:100;
+  background:rgba(28,28,30,.92);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+  color:#fff;padding:13px 22px;border-radius:var(--pill);font-size:14px;font-weight:500;
+  box-shadow:var(--shadow-lg);display:flex;align-items:center;gap:9px;animation:toast-in .32s var(--ease)}
+.toast svg{width:17px;height:17px}
+.toast.error{background:rgba(255,59,48,.95)}
+.toast.success .dot{color:var(--success)}
+.toast.hidden{display:none}
+@keyframes toast-in{from{opacity:0;transform:translateX(-50%) translateY(14px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.pill{display:inline-block;padding:3px 11px;border-radius:var(--pill);background:var(--accent-soft);
+  color:var(--accent);font-size:12px;font-weight:500;letter-spacing:0}
+.pill.gray{background:var(--surface-2);color:var(--muted)}
+.price{font-variant-numeric:tabular-nums;font-weight:600}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (max-width:640px){:root{--space:16px}.panel-head h2{font-size:23px}
+  input[type=search]{min-width:0;flex:1}.tabs{top:69px}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+    </span>
+    <div>
+      <h1>Supplier Catalog</h1>
+      <p class="subtitle">Catalogs, quotes &amp; collateral — everything in your browser</p>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn" id="load-samples" title="Populate demo data to try it out">Load sample data</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <div class="tabs-inner" role="tablist">
+    <button class="tab active" data-tab="suppliers" role="tab">Suppliers<span class="count" data-count="suppliers"></span></button>
+    <button class="tab" data-tab="catalog" role="tab">Catalog<span class="count" data-count="catalog"></span></button>
+    <button class="tab" data-tab="quotes" role="tab">Quotes<span class="count" data-count="quotes"></span></button>
+    <button class="tab" data-tab="documents" role="tab">Documents<span class="count" data-count="documents"></span></button>
+  </div>
+</nav>
+
+<main>
+  <section id="suppliers" class="panel active">
+    <div class="panel-head"><h2>Suppliers</h2>
+      <div class="actions">
+        <input type="search" id="supplier-search" placeholder="Search suppliers…" />
+        <button class="btn primary" id="add-supplier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Supplier</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="suppliers-table">
+      <thead><tr><th>Name</th><th>Contact</th><th>Email</th><th>Phone</th><th>Category</th><th class="right">Actions</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="catalog" class="panel">
+    <div class="panel-head"><h2>Catalog</h2>
+      <div class="actions">
+        <input type="search" id="catalog-search" placeholder="Search name, SKU, description…" />
+        <select id="catalog-supplier-filter"><option value="">All suppliers</option></select>
+        <select id="catalog-category-filter"><option value="">All product types</option></select>
+        <button class="btn" id="import-catalog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Catalog</button>
+        <button class="btn" id="import-quotation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Quotation</button>
+        <button class="btn" id="import-images"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>Images</button>
+        <button class="btn primary" id="add-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Item</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="catalog-table">
+      <thead><tr><th>Item</th><th>SKU</th><th>Supplier</th><th>Unit</th><th>Category</th><th class="right">Actions</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="quotes" class="panel">
+    <div class="panel-head"><h2>Quotes</h2>
+      <div class="actions">
+        <select id="quote-item-filter"><option value="">All catalog items</option></select>
+        <button class="btn primary" id="add-quote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add Quote</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="quotes-table">
+      <thead><tr><th>Item</th><th>Unit Price</th><th>Min Qty</th><th>Valid From</th><th>Valid Until</th><th class="right">Actions</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="documents" class="panel">
+    <div class="panel-head"><h2>Documents</h2>
+      <div class="actions">
+        <button class="btn primary" id="add-document"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Upload Document</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table id="documents-table">
+      <thead><tr><th>File</th><th>Type</th><th>Size</th><th>Supplier</th><th>Item</th><th class="right">Actions</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+</main>
+
+<div id="modal-overlay" class="modal-overlay hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-head"><h3 id="modal-title">Form</h3>
+      <button class="icon-btn" id="modal-close" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+    <form id="modal-form"><div id="modal-fields"></div>
+      <div class="modal-foot"><span id="modal-extra"></span><span class="spacer"></span>
+        <button type="button" class="btn" id="modal-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script>
+"use strict";
+/* =========================================================================
+   1. Utilities
+   ========================================================================= */
+const ICONS={
+  check:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  alert:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  box:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`,
+  tag:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>`,
+  doc:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,
+  image:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+};
+function esc(s){return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));}
+function fmtSize(b){if(b<1024)return b+" B";if(b<1048576)return (b/1024).toFixed(1)+" KB";return (b/1048576).toFixed(1)+" MB";}
+function toast(msg,isError){const el=document.getElementById("toast");
+  el.innerHTML=`<span class="dot">${isError?ICONS.alert:ICONS.check}</span>`+esc(msg);
+  el.className="toast"+(isError?" error":" success");clearTimeout(toast._t);
+  toast._t=setTimeout(()=>el.className="toast hidden",2800);}
+function emptyState(cs,icon,title,sub){return `<tr><td colspan="${cs}" class="empty">${icon}<div class="empty-title">${esc(title)}</div><div class="empty-sub">${esc(sub)}</div></td></tr>`;}
+function skeletonRows(cs,rows=4){const cells=Array.from({length:cs},()=>`<td><div class="skeleton"></div></td>`).join("");
+  return Array.from({length:rows},()=>`<tr class="skeleton-row">${cells}</tr>`).join("");}
+function debounce(fn,ms){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
+const nowISO=()=>new Date().toISOString();
+
+/* =========================================================================
+   2. Local data store (IndexedDB)
+   ========================================================================= */
+const DB_NAME="supplier-catalog",DB_VERSION=1,STORES=["suppliers","items","quotes","documents"];
+const dbp=new Promise((res,rej)=>{
+  const r=indexedDB.open(DB_NAME,DB_VERSION);
+  r.onupgradeneeded=e=>{const db=e.target.result;
+    STORES.forEach(s=>{if(!db.objectStoreNames.contains(s))db.createObjectStore(s,{keyPath:"id",autoIncrement:true});});};
+  r.onsuccess=e=>res(e.target.result);r.onerror=e=>rej(e.target.error);
+});
+function reqP(req){return new Promise((res,rej)=>{req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);});}
+async function os(name,mode){return (await dbp).transaction(name,mode).objectStore(name);}
+const store=name=>({
+  all:async()=>reqP(await os(name,"readonly").then(s=>s.getAll())),
+  get:async id=>reqP(await os(name,"readonly").then(s=>s.get(id))),
+  add:async o=>{o.created_at=o.created_at||nowISO();return reqP(await os(name,"readwrite").then(s=>s.add(o)));},
+  put:async o=>reqP(await os(name,"readwrite").then(s=>s.put(o))),
+  del:async id=>reqP(await os(name,"readwrite").then(s=>s.delete(id))),
+});
+const Suppliers=store("suppliers"),Items=store("items"),Quotes=store("quotes"),Documents=store("documents");
+
+// Higher-level queries / cascades
+async function itemsForSupplier(id){return (await Items.all()).filter(i=>i.supplier_id===id);}
+async function quotesForItem(id){return (await Quotes.all()).filter(q=>q.catalog_item_id===id);}
+async function deleteSupplierCascade(id){
+  for(const it of await itemsForSupplier(id))await deleteItemCascade(it.id);
+  for(const d of (await Documents.all()).filter(d=>d.supplier_id===id))await Documents.del(d.id);
+  await Suppliers.del(id);
+}
+async function deleteItemCascade(id){
+  for(const q of await quotesForItem(id))await Quotes.del(q.id);
+  for(const d of (await Documents.all()).filter(d=>d.catalog_item_id===id))await Documents.del(d.id);
+  await Items.del(id);
+}
+
+// in-memory caches for name lookups
+let suppliersCache=[],itemsCache=[];
+const supplierName=id=>{const s=suppliersCache.find(x=>x.id===id);return s?s.name:"#"+id;};
+const itemName=id=>{const i=itemsCache.find(x=>x.id===id);return i?i.name:"#"+id;};
+
+/* =========================================================================
+   3. ZIP reader (native, via DecompressionStream) — used for .xlsx & image zips
+   ========================================================================= */
+async function unzip(buf){
+  const dv=new DataView(buf),u8=new Uint8Array(buf);
+  // locate End Of Central Directory record
+  let eocd=-1;
+  for(let i=u8.length-22;i>=0;i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break;}}
+  if(eocd<0)throw new Error("Not a valid zip file");
+  const count=dv.getUint16(eocd+10,true);let off=dv.getUint32(eocd+16,true);
+  const entries=[];
+  for(let n=0;n<count;n++){
+    if(dv.getUint32(off,true)!==0x02014b50)break;
+    const method=dv.getUint16(off+10,true);
+    const compSize=dv.getUint32(off+20,true);
+    const nameLen=dv.getUint16(off+28,true);
+    const extraLen=dv.getUint16(off+30,true);
+    const commentLen=dv.getUint16(off+32,true);
+    const localOff=dv.getUint32(off+42,true);
+    const name=new TextDecoder().decode(u8.subarray(off+46,off+46+nameLen));
+    entries.push({name,method,compSize,localOff});
+    off+=46+nameLen+extraLen+commentLen;
+  }
+  const out={};
+  for(const e of entries){
+    if(e.name.endsWith("/")){continue;}
+    const lnameLen=dv.getUint16(e.localOff+26,true);
+    const lextraLen=dv.getUint16(e.localOff+28,true);
+    const dataStart=e.localOff+30+lnameLen+lextraLen;
+    const comp=u8.subarray(dataStart,dataStart+e.compSize);
+    let bytes;
+    if(e.method===0){bytes=comp.slice();}
+    else if(e.method===8){
+      const ds=new DecompressionStream("deflate-raw");
+      const ab=await new Response(new Blob([comp]).stream().pipeThrough(ds)).arrayBuffer();
+      bytes=new Uint8Array(ab);
+    }else{continue;}
+    out[e.name]=bytes;
+  }
+  return out;
+}
+
+/* =========================================================================
+   4. Parsers — CSV / XLSX (+embedded images) / PDF
+   ========================================================================= */
+function parseCSV(text){
+  text=text.replace(/^﻿/,"");
+  const rows=[];let row=[],field="",q=false,i=0;
+  while(i<text.length){const c=text[i];
+    if(q){if(c==='"'){if(text[i+1]==='"'){field+='"';i++;}else q=false;}else field+=c;}
+    else{if(c==='"')q=true;else if(c===","){row.push(field);field="";}
+      else if(c==="\r"){}else if(c==="\n"){row.push(field);rows.push(row);row=[];field="";}
+      else field+=c;}
+    i++;}
+  if(field!==""||row.length){row.push(field);rows.push(row);}
+  return rows;
+}
+
+const colToIdx=ref=>{const m=/^([A-Z]+)/.exec(ref);if(!m)return 0;let n=0;for(const ch of m[1])n=n*26+(ch.charCodeAt(0)-64);return n-1;};
+const rowOf=ref=>parseInt(/(\d+)$/.exec(ref)[1],10);
+
+async function parseXLSX(buf){
+  const z=await unzip(buf);
+  const dec=new TextDecoder();
+  const xml=name=>z[name]?new DOMParser().parseFromString(dec.decode(z[name]),"application/xml"):null;
+  // shared strings
+  const shared=[];const ss=xml("xl/sharedStrings.xml");
+  if(ss)ss.querySelectorAll("si").forEach(si=>{
+    shared.push(Array.from(si.querySelectorAll("t")).map(t=>t.textContent).join(""));});
+  // first worksheet path
+  let sheetPath="xl/worksheets/sheet1.xml";
+  const wb=xml("xl/workbook.xml"),wbRels=xml("xl/_rels/workbook.xml.rels");
+  if(wb&&wbRels){const first=wb.querySelector("sheets > sheet");
+    const rid=first&&first.getAttribute("r:id");
+    if(rid){const rel=Array.from(wbRels.querySelectorAll("Relationship")).find(r=>r.getAttribute("Id")===rid);
+      if(rel)sheetPath="xl/"+rel.getAttribute("Target").replace(/^\/?xl\//,"");}}
+  if(!z[sheetPath]){const k=Object.keys(z).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort();if(k.length)sheetPath=k[0];}
+  const sheet=xml(sheetPath);
+  // build rows aligned to spreadsheet row numbers
+  let maxRow=0;const cellMap={};
+  if(sheet)sheet.querySelectorAll("sheetData > row").forEach(r=>{
+    r.querySelectorAll("c").forEach(c=>{
+      const ref=c.getAttribute("r");if(!ref)return;
+      const rn=rowOf(ref),ci=colToIdx(ref);maxRow=Math.max(maxRow,rn);
+      const t=c.getAttribute("t");let v="";
+      if(t==="s"){const vEl=c.querySelector("v");if(vEl)v=shared[+vEl.textContent]||"";}
+      else if(t==="inlineStr"){const tEl=c.querySelector("is t");if(tEl)v=tEl.textContent;}
+      else{const vEl=c.querySelector("v");if(vEl)v=vEl.textContent;}
+      (cellMap[rn]=cellMap[rn]||{})[ci]=v;});});
+  const grid=[];
+  for(let rn=1;rn<=maxRow;rn++){const cm=cellMap[rn]||{};
+    const maxc=Math.max(-1,...Object.keys(cm).map(Number));
+    const arr=[];for(let c=0;c<=maxc;c++)arr.push(cm[c]!==undefined?cm[c]:"");grid.push(arr);}
+  const headers=grid[0]||[],rows=grid.slice(1);
+  // embedded images -> {row(1-based), bytes, type}
+  const images=[];
+  const ctMap={png:"image/png",jpg:"image/jpeg",jpeg:"image/jpeg",gif:"image/gif",bmp:"image/bmp",webp:"image/webp"};
+  for(const dname of Object.keys(z).filter(n=>/^xl\/drawings\/drawing\d+\.xml$/.test(n))){
+    const dxml=xml(dname);const relName="xl/drawings/_rels/"+dname.split("/").pop()+".rels";
+    const drels=xml(relName);const relTarget={};
+    if(drels)drels.querySelectorAll("Relationship").forEach(r=>relTarget[r.getAttribute("Id")]=r.getAttribute("Target"));
+    dxml&&dxml.querySelectorAll("*").forEach(node=>{
+      if(node.localName!=="oneCellAnchor"&&node.localName!=="twoCellAnchor")return;
+      const fromRow=node.querySelector("from row");if(!fromRow)return;
+      const rn=parseInt(fromRow.textContent,10)+1; // 0-based -> 1-based
+      const blip=node.querySelector("blip");if(!blip)return;
+      const embed=blip.getAttribute("r:embed")||blip.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","embed");
+      let target=relTarget[embed];if(!target)return;
+      const path=("xl/drawings/"+target).replace(/xl\/drawings\/\.\.\//,"xl/");
+      const bytes=z[path];if(!bytes)return;
+      const ext=path.split(".").pop().toLowerCase();
+      images.push({row:rn,bytes,type:ctMap[ext]||"image/png"});});
+  }
+  return {headers,rows,images};
+}
+
+let _pdfReady=null;
+function ensurePdfJs(){
+  if(window.pdfjsLib)return Promise.resolve();
+  if(_pdfReady)return _pdfReady;
+  _pdfReady=new Promise((res,rej)=>{
+    const s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload=()=>{window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";res();};
+    s.onerror=()=>rej(new Error("Could not load the PDF library (need internet for PDF import)."));
+    document.head.appendChild(s);});
+  return _pdfReady;
+}
+async function parsePDF(buf){
+  await ensurePdfJs();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  const lines=[]; // {y, page, tokens:[{x,w,str}]}
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p);const tc=await page.getTextContent();
+    const byY={};
+    tc.items.forEach(it=>{const str=(it.str||"").trim();if(!str)return;
+      const x=it.transform[4],y=Math.round(it.transform[5]);
+      const key=p+":"+y;(byY[key]=byY[key]||{y,page:p,tokens:[]}).tokens.push({x,w:it.width||0,str});});
+    Object.values(byY).forEach(l=>lines.push(l));
+  }
+  // sort top-to-bottom (higher y first), then cluster tokens into cells
+  lines.sort((a,b)=>a.page-b.page||b.y-a.y);
+  const toCells=line=>{line.tokens.sort((a,b)=>a.x-b.x);
+    const cells=[];let cur=null;
+    for(const t of line.tokens){
+      if(cur&&t.x-(cur.x+cur.w)<18){cur.str+=" "+t.str;cur.w=t.x+t.w-cur.x;}
+      else{cur={x:t.x,w:t.w,str:t.str};cells.push(cur);}}
+    return cells;};
+  const rowsCells=lines.map(toCells);
+  // header = first row that maps a 'name' column
+  let hi=rowsCells.findIndex(cells=>cells.some(c=>canonicalHeader(c.str)==="name"));
+  if(hi<0)return {headers:[],rows:[],images:[]};
+  const headerCells=rowsCells[hi];const anchors=headerCells.map(c=>c.x+c.w/2);
+  const headers=headerCells.map(c=>c.str);
+  const rows=[];
+  for(let i=hi+1;i<rowsCells.length;i++){
+    const cells=rowsCells[i];if(!cells.length)continue;
+    const arr=new Array(anchors.length).fill("");
+    cells.forEach(c=>{const cx=c.x+c.w/2;let best=0,bd=1e9;
+      anchors.forEach((a,k)=>{const d=Math.abs(a-cx);if(d<bd){bd=d;best=k;}});
+      arr[best]=arr[best]?arr[best]+" "+c.str:c.str;});
+    rows.push(arr);
+  }
+  return {headers,rows,images:[]};
+}
+
+/* =========================================================================
+   5. Import core — header aliases, normalize, dispatch
+   ========================================================================= */
+const HEADER_ALIASES={
+  name:["name","product","product name","part name","item","item name","item description","product description","title","material","model"],
+  sku:["sku","code","item code","product code","part","part number","part no","part no.","mpn"],
+  unit:["unit","uom","unit of measure"],
+  category:["category","type","product type","group","class"],
+  description:["description","desc","details","notes"],
+  unit_price:["unit price","price","cost","rate","unit cost","list price"],
+  currency:["currency","ccy","cur"],
+  min_quantity:["min quantity","min qty","moq","minimum quantity","minimum order quantity","min order qty"],
+};
+const ALIAS_TO_FIELD={};Object.entries(HEADER_ALIASES).forEach(([f,al])=>al.forEach(a=>ALIAS_TO_FIELD[a]=f));
+const canonicalHeader=h=>h==null?null:(ALIAS_TO_FIELD[String(h).trim().toLowerCase()]||null);
+const cleanCell=v=>{if(v==null)return null;const s=String(v).trim();return s||null;};
+const TEMPLATE_HEADERS=["Name","SKU","Unit","Category","Description","Unit Price","Currency","Min Quantity"];
+
+function labelHeaders(headers){const labels=[],seen={};
+  headers.forEach((h,idx)=>{let base=cleanCell(h)||("Column "+(idx+1));
+    if(seen[base]){seen[base]++;base=base+" ("+seen[base]+")";}else seen[base]=1;labels.push(base);});
+  return labels;}
+
+function normalizeRows(headers,rawRows){
+  const result={rows:[],warnings:[]};
+  const labels=labelHeaders(headers);
+  const colMap={};const used=new Set();
+  headers.forEach((h,idx)=>{const c=canonicalHeader(h);if(c&&!used.has(c)){colMap[idx]=c;used.add(c);}});
+  rawRows.forEach((raw,offset)=>{
+    const rowNo=offset+2;
+    const attributes={};
+    labels.forEach((label,idx)=>{const cell=idx<raw.length?cleanCell(raw[idx]):null;if(cell!=null)attributes[label]=cell;});
+    for(let idx=labels.length;idx<raw.length;idx++){const cell=cleanCell(raw[idx]);if(cell!=null)attributes["Column "+(idx+1)]=cell;}
+    if(!Object.keys(attributes).length)return; // skip blank row
+    const values={};Object.entries(colMap).forEach(([idx,f])=>{idx=+idx;values[f]=idx<raw.length?cleanCell(raw[idx]):null;});
+    let name=values.name;
+    if(!name){name=values.sku||Object.values(attributes)[0];
+      if(used.has("name"))result.warnings.push({row:rowNo,warning:`Missing name; using "${name}"`});}
+    const row={name,sku:values.sku||null,unit:values.unit||null,category:values.category||null,
+      description:values.description||null,unit_price:null,currency:"USD",min_quantity:1,
+      source_row:rowNo,attributes};
+    if(values.unit_price!=null){
+      const cleaned=values.unit_price.replace(/,/g,"").replace(/^[$€£\s]+/,"").trim();
+      const price=parseFloat(cleaned);
+      if(!isNaN(price)&&price>=0)row.unit_price=price;
+      else result.warnings.push({row:rowNo,warning:`Unparseable unit_price "${values.unit_price}"; stored in attributes only`});}
+    if(values.currency){const c=values.currency;
+      if(c.length===3&&/^[a-z]+$/i.test(c))row.currency=c.toUpperCase();
+      else result.warnings.push({row:rowNo,warning:`Invalid currency "${c}"; defaulting to USD`});}
+    if(values.min_quantity!=null){const qn=parseInt(parseFloat(values.min_quantity),10);
+      if(!isNaN(qn)&&qn>=1)row.min_quantity=qn;
+      else result.warnings.push({row:rowNo,warning:`Invalid min_quantity "${values.min_quantity}"; defaulting to 1`});}
+    row.has_price=row.unit_price!=null;
+    result.rows.push(row);
+  });
+  return result;
+}
+
+async function readFile(file,as){return new Promise((res,rej)=>{const r=new FileReader();
+  r.onload=()=>res(r.result);r.onerror=()=>rej(r.error);
+  if(as==="text")r.readAsText(file);else r.readAsArrayBuffer(file);});}
+
+async function parseCatalogFile(file){
+  const name=(file.name||"").toLowerCase();
+  if(name.endsWith(".csv")){const rows=parseCSV(await readFile(file,"text"));
+    const r=normalizeRows(rows[0]||[],rows.slice(1));r.images=[];return r;}
+  if(name.endsWith(".xlsx")){const {headers,rows,images}=await parseXLSX(await readFile(file,"buf"));
+    const r=normalizeRows(headers,rows);r.images=images;return r;}
+  if(name.endsWith(".pdf")){const {headers,rows}=await parsePDF(await readFile(file,"buf"));
+    const r=normalizeRows(headers,rows);r.images=[];return r;}
+  throw new Error("Unsupported file type. Please upload a .csv, .xlsx or .pdf file.");
+}
+
+/* =========================================================================
+   6. Business operations (import catalog / quotation / images)
+   ========================================================================= */
+const IMAGE_EXTS=[".jpg",".jpeg",".png",".gif",".webp",".bmp"];
+const isImageName=n=>IMAGE_EXTS.includes((n.match(/\.[^.]+$/)||[""])[0].toLowerCase());
+const ctForName=n=>({".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",".gif":"image/gif",".webp":"image/webp",".bmp":"image/bmp"}[(n.match(/\.[^.]+$/)||[""])[0].toLowerCase()]||"application/octet-stream");
+function skuCandidates(filename){const stem=(filename.split("/").pop()||filename).replace(/\.[^.]+$/,"").trim();
+  const out=[stem];const base=stem.replace(/_\d+$/,"");if(base&&base!==stem)out.push(base);return out;}
+
+async function importCatalog(supplierId,parsed){
+  let created=0,updated=0,quotes=0,imagesAttached=0;const rowToItem={};
+  const existing=await itemsForSupplier(supplierId);
+  for(const row of parsed.rows){
+    let item=row.sku?existing.find(i=>i.sku===row.sku):null;
+    if(!item){item={supplier_id:supplierId,name:row.name,sku:row.sku,unit:row.unit,
+        category:row.category,description:row.description,attributes:row.attributes};
+      item.id=await Items.add(item);existing.push(item);created++;}
+    else{item.name=row.name;item.unit=row.unit;item.category=row.category;
+      item.description=row.description;item.attributes=row.attributes;await Items.put(item);updated++;}
+    rowToItem[row.source_row]=item;
+    if(row.has_price){await Quotes.add({catalog_item_id:item.id,unit_price:row.unit_price,
+      currency:row.currency,min_quantity:row.min_quantity,valid_from:null,valid_until:null,notes:null});quotes++;}
+  }
+  for(const img of parsed.images||[]){const item=rowToItem[img.row];if(!item)continue;
+    const blob=new Blob([img.bytes],{type:img.type});
+    await Documents.add({supplier_id:supplierId,catalog_item_id:item.id,filename:"image_row"+img.row+"."+(img.type.split("/")[1]||"png"),
+      content_type:img.type,size_bytes:blob.size,kind:"image",blob});imagesAttached++;}
+  return {rows_captured:parsed.rows.length,items_created:created,items_updated:updated,
+    quotes_created:quotes,images_attached:imagesAttached,rows_with_warnings:parsed.warnings.length,warnings:parsed.warnings};
+}
+
+async function importQuotation(supplierId,parsed){
+  let quotes=0,unmatched=0,noPrice=0;const matched=new Set();const warnings=[...parsed.warnings];
+  const existing=await itemsForSupplier(supplierId);
+  for(const row of parsed.rows){
+    if(!row.sku){unmatched++;warnings.push({row:row.source_row,warning:"No SKU; cannot match to catalog"});continue;}
+    const item=existing.find(i=>i.sku===row.sku);
+    if(!item){unmatched++;warnings.push({row:row.source_row,warning:`SKU "${row.sku}" not in catalog`});continue;}
+    if(!row.has_price){noPrice++;warnings.push({row:row.source_row,warning:`SKU "${row.sku}": no price to quote`});continue;}
+    await Quotes.add({catalog_item_id:item.id,unit_price:row.unit_price,currency:row.currency,
+      min_quantity:row.min_quantity,valid_from:null,valid_until:null,notes:null});
+    quotes++;matched.add(item.id);
+  }
+  return {quotes_created:quotes,items_matched:matched.size,rows_unmatched:unmatched,rows_without_price:noPrice,warnings};
+}
+
+async function importImages(supplierId,file){
+  const name=(file.name||"").toLowerCase();let entries=[],skipped=[];
+  if(name.endsWith(".zip")){const z=await unzip(await readFile(file,"buf"));
+    for(const [fn,bytes] of Object.entries(z)){const base=fn.split("/").pop();
+      if(!base||base.startsWith("."))continue;
+      if(isImageName(fn))entries.push({filename:base,bytes,type:ctForName(fn)});
+      else skipped.push(base);}}
+  else if(isImageName(name)){entries.push({filename:file.name,bytes:new Uint8Array(await readFile(file,"buf")),type:file.type||ctForName(name)});}
+  else throw new Error("Upload a .zip of images or a single image file (.jpg/.png/…).");
+  const existing=await itemsForSupplier(supplierId);
+  let stored=0;const unmatched=[];
+  for(const e of entries){
+    let item=null;for(const sku of skuCandidates(e.filename)){item=existing.find(i=>i.sku===sku);if(item)break;}
+    if(!item){unmatched.push(e.filename);continue;}
+    const blob=new Blob([e.bytes],{type:e.type});
+    await Documents.add({supplier_id:supplierId,catalog_item_id:item.id,filename:e.filename,
+      content_type:e.type,size_bytes:blob.size,kind:"image",blob});stored++;}
+  return {images_stored:stored,images_unmatched:unmatched,files_skipped:skipped};
+}
+
+/* =========================================================================
+   7. Modal system
+   ========================================================================= */
+let onSubmit=null;
+function openModal(title,fields,handler,extraFooterHtml=""){
+  document.getElementById("modal-title").textContent=title;
+  document.getElementById("modal-extra").innerHTML=extraFooterHtml;
+  const c=document.getElementById("modal-fields");c.innerHTML="";
+  fields.forEach(f=>{const wrap=document.createElement("div");wrap.className="field";
+    const label=document.createElement("label");label.textContent=f.label+(f.required?" *":"");
+    let input;
+    if(f.type==="textarea")input=document.createElement("textarea");
+    else if(f.type==="select"){input=document.createElement("select");
+      (f.options||[]).forEach(o=>{const opt=document.createElement("option");opt.value=o.value;opt.textContent=o.label;input.appendChild(opt);});}
+    else{input=document.createElement("input");input.type=f.type||"text";}
+    input.name=f.name;if(f.required)input.required=true;if(f.step)input.step=f.step;
+    if(f.min!==undefined)input.min=f.min;if(f.value!=null)input.value=f.value;if(f.accept)input.accept=f.accept;
+    wrap.appendChild(label);wrap.appendChild(input);c.appendChild(wrap);
+    if(f.type==="select"&&f.value!=null)input.value=f.value;});
+  onSubmit=handler;
+  document.getElementById("modal-overlay").classList.remove("hidden");
+}
+function closeModal(){document.getElementById("modal-overlay").classList.add("hidden");
+  document.getElementById("modal-extra").innerHTML="";onSubmit=null;}
+document.getElementById("modal-close").addEventListener("click",closeModal);
+document.getElementById("modal-cancel").addEventListener("click",closeModal);
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!document.getElementById("modal-overlay").classList.contains("hidden"))closeModal();});
+document.getElementById("modal-overlay").addEventListener("click",e=>{if(e.target.id==="modal-overlay")closeModal();});
+document.getElementById("modal-form").addEventListener("submit",async e=>{
+  e.preventDefault();const form=e.target;const values={};
+  new FormData(form).forEach((v,k)=>values[k]=v);
+  try{const keepOpen=await onSubmit(values,form);if(keepOpen!==false)closeModal();}
+  catch(err){toast(err.message,true);}
+});
+function cleanEmpty(values){const out={};Object.entries(values).forEach(([k,v])=>out[k]=v===""?null:v);return out;}
+
+/* =========================================================================
+   8. Tabs + counts
+   ========================================================================= */
+document.querySelectorAll(".tab").forEach(tab=>tab.addEventListener("click",()=>{
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  tab.classList.add("active");document.getElementById(tab.dataset.tab).classList.add("active");
+  refreshTab(tab.dataset.tab);}));
+function refreshTab(name){({suppliers:loadSuppliers,catalog:loadCatalog,quotes:loadQuotes,documents:loadDocuments}[name]||(()=>{}))();}
+async function refreshCounts(){
+  const [s,c,q,d]=await Promise.all([Suppliers.all(),Items.all(),Quotes.all(),Documents.all()]);
+  const set=(k,n)=>{const el=document.querySelector(`.count[data-count="${k}"]`);if(el)el.textContent=n?" "+n:"";};
+  set("suppliers",s.length);set("catalog",c.length);set("quotes",q.length);set("documents",d.length);
+}
+
+/* =========================================================================
+   9. Suppliers
+   ========================================================================= */
+async function loadSuppliers(){
+  const tbody=document.querySelector("#suppliers-table tbody");tbody.innerHTML=skeletonRows(6);
+  const q=document.getElementById("supplier-search").value.trim().toLowerCase();
+  suppliersCache=await Suppliers.all();
+  let list=suppliersCache;
+  if(q)list=list.filter(s=>(s.name||"").toLowerCase().includes(q));
+  list.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  if(!list.length){tbody.innerHTML=q?emptyState(6,ICONS.box,"No matches",`Nothing matches “${q}”.`)
+    :emptyState(6,ICONS.box,"No suppliers yet","Add a supplier, or click “Load sample data”.");refreshCounts();return;}
+  tbody.innerHTML=list.map(s=>`<tr>
+    <td>${esc(s.name)}</td><td>${esc(s.contact_name)||"—"}</td><td>${esc(s.email)||"—"}</td>
+    <td>${esc(s.phone)||"—"}</td><td>${s.category?`<span class="pill">${esc(s.category)}</span>`:"—"}</td>
+    <td class="right"><button class="btn link" onclick="editSupplier(${s.id})">Edit</button>
+      <button class="btn danger-text" onclick="deleteSupplier(${s.id})">Delete</button></td></tr>`).join("");
+  refreshCounts();
+}
+const supplierFields=(s={})=>[
+  {name:"name",label:"Name",required:true,value:s.name},
+  {name:"contact_name",label:"Contact name",value:s.contact_name},
+  {name:"email",label:"Email",type:"email",value:s.email},
+  {name:"phone",label:"Phone",value:s.phone},
+  {name:"category",label:"Category",value:s.category},
+  {name:"address",label:"Address",type:"textarea",value:s.address},
+  {name:"notes",label:"Notes",type:"textarea",value:s.notes},
+];
+document.getElementById("add-supplier").addEventListener("click",()=>{
+  openModal("Add Supplier",supplierFields(),async v=>{await Suppliers.add(cleanEmpty(v));toast("Supplier created");loadSuppliers();});});
+window.editSupplier=async id=>{const s=await Suppliers.get(id);
+  openModal("Edit Supplier",supplierFields(s),async v=>{await Suppliers.put({...s,...cleanEmpty(v)});toast("Supplier updated");loadSuppliers();});};
+window.deleteSupplier=async id=>{if(!confirm("Delete this supplier and all its items, quotes and documents?"))return;
+  await deleteSupplierCascade(id);toast("Supplier deleted");loadSuppliers();};
+document.getElementById("supplier-search").addEventListener("input",debounce(loadSuppliers,200));
+
+/* =========================================================================
+   10. Catalog
+   ========================================================================= */
+async function ensureSuppliers(){if(!suppliersCache.length)suppliersCache=await Suppliers.all();}
+async function ensureItems(){itemsCache=await Items.all();}
+
+async function loadCatalog(){
+  const tbody=document.querySelector("#catalog-table tbody");tbody.innerHTML=skeletonRows(6);
+  await ensureSuppliers();
+  const sf=document.getElementById("catalog-supplier-filter"),cf=document.getElementById("catalog-category-filter");
+  const cur=sf.value,curC=cf.value;
+  sf.innerHTML=`<option value="">All suppliers</option>`+suppliersCache.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  sf.value=cur;
+  const all=await Items.all();itemsCache=all;
+  const cats=[...new Set(all.map(i=>i.category).filter(Boolean))].sort();
+  cf.innerHTML=`<option value="">All product types</option>`+cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  cf.value=curC;
+  const q=document.getElementById("catalog-search").value.trim().toLowerCase();
+  let list=all;
+  if(sf.value)list=list.filter(i=>i.supplier_id===+sf.value);
+  if(cf.value)list=list.filter(i=>i.category===cf.value);
+  if(q)list=list.filter(i=>[i.name,i.sku,i.description].some(x=>(x||"").toLowerCase().includes(q)));
+  list.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const docs=await Documents.all();const thumbs={};
+  docs.filter(d=>d.kind==="image"&&d.catalog_item_id).forEach(d=>{if(!thumbs[d.catalog_item_id])thumbs[d.catalog_item_id]=d;});
+  if(!list.length){const filtering=q||sf.value||cf.value;
+    tbody.innerHTML=filtering?emptyState(6,ICONS.box,"No matching items","Try clearing the search or filters.")
+      :emptyState(6,ICONS.box,"No catalog items yet","Import a catalog or add an item to begin.");refreshCounts();return;}
+  tbody.innerHTML=list.map(i=>{
+    const t=thumbs[i.id];
+    const thumb=t?`<img class="thumb" src="${URL.createObjectURL(t.blob)}" alt="" />`:`<span class="thumb thumb-ph">${ICONS.image}</span>`;
+    return `<tr><td><div class="cell-with-thumb">${thumb}<span>${esc(i.name)}</span></div></td>
+      <td>${esc(i.sku)||"—"}</td><td>${esc(supplierName(i.supplier_id))}</td><td>${esc(i.unit)||"—"}</td>
+      <td>${i.category?`<span class="pill">${esc(i.category)}</span>`:"—"}</td>
+      <td class="right"><button class="btn link" onclick="viewImages(${i.id})">Photos</button>
+        ${i.attributes&&Object.keys(i.attributes).length?`<button class="btn link" onclick="viewAttributes(${i.id})">Columns</button>`:""}
+        <button class="btn link" onclick="editItem(${i.id})">Edit</button>
+        <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button></td></tr>`;}).join("");
+  refreshCounts();
+}
+window.viewAttributes=async id=>{const i=await Items.get(id);if(!i||!i.attributes)return;
+  const rows=Object.entries(i.attributes).map(([k,v])=>`<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join("");
+  openModal("Original Columns — "+i.name,[],async()=>{});
+  document.getElementById("modal-fields").innerHTML=`<table class="attrs"><tbody>${rows}</tbody></table>`;
+  document.getElementById("modal-extra").innerHTML="";};
+window.viewImages=async id=>{const i=await Items.get(id);
+  const imgs=(await Documents.all()).filter(d=>d.catalog_item_id===id&&d.kind==="image");
+  openModal("Photos — "+(i?i.name:id),[],async()=>{});
+  document.getElementById("modal-fields").innerHTML=imgs.length
+    ?`<div class="gallery">${imgs.map(d=>{const u=URL.createObjectURL(d.blob);
+        return `<a href="${u}" target="_blank" title="${esc(d.filename)}"><img src="${u}" alt="${esc(d.filename)}"/></a>`;}).join("")}</div>`
+    :`<p class="muted">No images yet. Use “Import Images” to attach photos by SKU.</p>`;
+  document.getElementById("modal-extra").innerHTML="";};
+const itemFields=(i={})=>[
+  {name:"supplier_id",label:"Supplier",type:"select",required:true,value:i.supplier_id,
+    options:suppliersCache.map(s=>({value:s.id,label:s.name}))},
+  {name:"name",label:"Name",required:true,value:i.name},
+  {name:"sku",label:"SKU",value:i.sku},
+  {name:"unit",label:"Unit (e.g. each, kg)",value:i.unit},
+  {name:"category",label:"Category",value:i.category},
+  {name:"description",label:"Description",type:"textarea",value:i.description},
+];
+document.getElementById("add-item").addEventListener("click",async()=>{
+  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
+  openModal("Add Catalog Item",itemFields(),async v=>{v=cleanEmpty(v);v.supplier_id=+v.supplier_id;
+    await Items.add(v);toast("Item created");loadCatalog();});});
+window.editItem=async id=>{await ensureSuppliers();const i=await Items.get(id);
+  openModal("Edit Catalog Item",itemFields(i),async v=>{v=cleanEmpty(v);v.supplier_id=+v.supplier_id;
+    await Items.put({...i,...v});toast("Item updated");loadCatalog();});};
+window.deleteItem=async id=>{if(!confirm("Delete this item and its quotes and documents?"))return;
+  await deleteItemCascade(id);toast("Item deleted");loadCatalog();};
+document.getElementById("catalog-supplier-filter").addEventListener("change",loadCatalog);
+document.getElementById("catalog-category-filter").addEventListener("change",loadCatalog);
+document.getElementById("catalog-search").addEventListener("input",debounce(loadCatalog,200));
+
+/* ----- import modals ----- */
+function warningList(warnings){if(!warnings||!warnings.length)return"";
+  const items=warnings.slice(0,20).map(w=>`<li>Row ${w.row}: ${esc(w.warning)}</li>`).join("");
+  const more=warnings.length>20?`<li>…and ${warnings.length-20} more</li>`:"";
+  return `<ul class="errs">${items}${more}</ul>`;}
+function openUploadModal({title,kind,accept,fileLabel,renderSummary,extraFooter}){
+  openModal(title,[
+    {name:"supplier_id",label:"Supplier",type:"select",required:true,options:suppliersCache.map(s=>({value:s.id,label:s.name}))},
+    {name:"file",label:fileLabel,type:"file",required:true,accept},
+  ],async(v,form)=>{
+    const fi=form.querySelector('input[name="file"]');if(!fi.files.length)throw new Error("Please choose a file");
+    const supplierId=+v.supplier_id;const file=fi.files[0];let summary;
+    if(kind==="catalog")summary=await importCatalog(supplierId,await parseCatalogFile(file));
+    else if(kind==="quotation")summary=await importQuotation(supplierId,await parseCatalogFile(file));
+    else summary=await importImages(supplierId,file);
+    document.getElementById("modal-title").textContent="Import Complete";
+    document.getElementById("modal-extra").innerHTML="";
+    document.getElementById("modal-fields").innerHTML=renderSummary(summary);
+    onSubmit=async()=>{};loadCatalog();return false;
+  },extraFooter||"");
+}
+document.getElementById("import-catalog").addEventListener("click",async()=>{
+  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
+  openUploadModal({title:"Import Catalog",kind:"catalog",accept:".csv,.xlsx,.pdf",
+    fileLabel:"Catalog file (.csv, .xlsx, .pdf)",
+    extraFooter:`<button type="button" class="btn link" id="dl-template">Download CSV template</button>`,
+    renderSummary:s=>`<p><strong>${s.rows_captured}</strong> row(s) captured —
+      <strong>${s.items_created}</strong> created, <strong>${s.items_updated}</strong> updated,
+      <strong>${s.quotes_created}</strong> quotes, <strong>${s.images_attached||0}</strong> images.</p>
+      <p class="muted">Every column from the file is stored on each item.</p>
+      ${s.rows_with_warnings?`<p>${s.rows_with_warnings} row(s) imported with warnings:</p>${warningList(s.warnings)}`:`<p>No warnings. 🎉</p>`}`});
+  setTimeout(()=>{const b=document.getElementById("dl-template");if(b)b.onclick=downloadTemplate;},0);
+});
+document.getElementById("import-quotation").addEventListener("click",async()=>{
+  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
+  openUploadModal({title:"Import Quotation (Step 2)",kind:"quotation",accept:".csv,.xlsx,.pdf",
+    fileLabel:"Quotation file with SKU + price + MOQ",
+    renderSummary:s=>`<p><strong>${s.quotes_created}</strong> quote(s) recorded across
+      <strong>${s.items_matched}</strong> catalog item(s).</p>
+      <p class="muted">Rows are matched to existing items by SKU.</p>
+      ${(s.rows_unmatched||s.rows_without_price)?`<p>${s.rows_unmatched} unmatched, ${s.rows_without_price} without a price:</p>${warningList(s.warnings)}`:`<p>All rows matched. 🎉</p>`}`});
+});
+document.getElementById("import-images").addEventListener("click",async()=>{
+  await ensureSuppliers();if(!suppliersCache.length)return toast("Add a supplier first",true);
+  openUploadModal({title:"Import Product Images",kind:"images",accept:".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
+    fileLabel:"A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
+    renderSummary:s=>{const u=(s.images_unmatched||[]).map(f=>`<li>${esc(f)}</li>`).join("");
+      const sk=(s.files_skipped||[]).map(f=>`<li>${esc(f)}</li>`).join("");
+      return `<p><strong>${s.images_stored}</strong> image(s) matched to products by SKU.</p>
+        ${u?`<p>No matching SKU for:</p><ul class="errs">${u}</ul>`:""}
+        ${sk?`<p class="muted">Skipped non-images:</p><ul class="errs">${sk}</ul>`:""}
+        ${!u&&!sk?`<p>All images matched. 🎉</p>`:""}`;}});
+});
+function downloadTemplate(){
+  const csv=[TEMPLATE_HEADERS.join(","),["Resistor 10k","R10K","each","Passives","1/4W 5% carbon film","0.05","USD","1000"].join(",")].join("\n");
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download="catalog-template.csv";a.click();
+}
+
+/* =========================================================================
+   11. Quotes
+   ========================================================================= */
+async function loadQuotes(){
+  const tbody=document.querySelector("#quotes-table tbody");tbody.innerHTML=skeletonRows(6);
+  await ensureItems();
+  const filter=document.getElementById("quote-item-filter");const cur=filter.value;
+  filter.innerHTML=`<option value="">All catalog items</option>`+itemsCache.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join("");
+  filter.value=cur;
+  let list=await Quotes.all();if(filter.value)list=list.filter(q=>q.catalog_item_id===+filter.value);
+  if(!list.length){tbody.innerHTML=emptyState(6,ICONS.tag,"No quotes yet","Import a quotation or add a price to a catalog item.");refreshCounts();return;}
+  tbody.innerHTML=list.map(q=>`<tr><td>${esc(itemName(q.catalog_item_id))}</td>
+    <td><span class="price">${(+q.unit_price).toFixed(2)}</span> ${esc(q.currency)}</td>
+    <td>${q.min_quantity}</td><td>${esc(q.valid_from)||"—"}</td><td>${esc(q.valid_until)||"—"}</td>
+    <td class="right"><button class="btn link" onclick="editQuote(${q.id})">Edit</button>
+      <button class="btn danger-text" onclick="deleteQuote(${q.id})">Delete</button></td></tr>`).join("");
+  refreshCounts();
+}
+const quoteFields=(q={})=>[
+  {name:"catalog_item_id",label:"Catalog item",type:"select",required:true,value:q.catalog_item_id,
+    options:itemsCache.map(i=>({value:i.id,label:i.name}))},
+  {name:"unit_price",label:"Unit price",type:"number",step:"0.01",min:0,required:true,value:q.unit_price},
+  {name:"currency",label:"Currency (3-letter)",value:q.currency||"USD"},
+  {name:"min_quantity",label:"Min quantity",type:"number",min:1,value:q.min_quantity||1},
+  {name:"valid_from",label:"Valid from",type:"date",value:q.valid_from},
+  {name:"valid_until",label:"Valid until",type:"date",value:q.valid_until},
+  {name:"notes",label:"Notes",type:"textarea",value:q.notes},
+];
+function prepQuote(v){v=cleanEmpty(v);v.catalog_item_id=+v.catalog_item_id;v.unit_price=+v.unit_price;v.min_quantity=+(v.min_quantity||1);return v;}
+document.getElementById("add-quote").addEventListener("click",async()=>{
+  await ensureItems();if(!itemsCache.length)return toast("Add a catalog item first",true);
+  openModal("Add Quote",quoteFields(),async v=>{await Quotes.add(prepQuote(v));toast("Quote created");loadQuotes();});});
+window.editQuote=async id=>{await ensureItems();const q=await Quotes.get(id);
+  openModal("Edit Quote",quoteFields(q),async v=>{await Quotes.put({...q,...prepQuote(v)});toast("Quote updated");loadQuotes();});};
+window.deleteQuote=async id=>{if(!confirm("Delete this quote?"))return;await Quotes.del(id);toast("Quote deleted");loadQuotes();};
+document.getElementById("quote-item-filter").addEventListener("change",loadQuotes);
+
+/* =========================================================================
+   12. Documents
+   ========================================================================= */
+async function loadDocuments(){
+  const tbody=document.querySelector("#documents-table tbody");tbody.innerHTML=skeletonRows(6);
+  await ensureSuppliers();await ensureItems();
+  const docs=await Documents.all();
+  if(!docs.length){tbody.innerHTML=emptyState(6,ICONS.doc,"No documents yet","Upload spec sheets, certificates or images.");refreshCounts();return;}
+  tbody.innerHTML=docs.map(d=>{const u=URL.createObjectURL(d.blob);
+    const thumb=d.kind==="image"?`<img class="thumb" src="${u}" alt=""/>`:`<span class="thumb thumb-ph">${ICONS.doc}</span>`;
+    return `<tr><td><div class="cell-with-thumb">${thumb}<span>${esc(d.filename)}</span></div></td>
+      <td>${esc(d.content_type)||"—"}</td><td>${fmtSize(d.size_bytes)}</td>
+      <td>${d.supplier_id?esc(supplierName(d.supplier_id)):"—"}</td>
+      <td>${d.catalog_item_id?esc(itemName(d.catalog_item_id)):"—"}</td>
+      <td class="right"><a class="btn link" href="${u}" download="${esc(d.filename)}">Download</a>
+        <button class="btn danger-text" onclick="deleteDocument(${d.id})">Delete</button></td></tr>`;}).join("");
+  refreshCounts();
+}
+document.getElementById("add-document").addEventListener("click",async()=>{
+  await ensureSuppliers();await ensureItems();
+  openModal("Upload Document",[
+    {name:"file",label:"File",type:"file",required:true},
+    {name:"supplier_id",label:"Attach to supplier",type:"select",options:[{value:"",label:"— none —"}].concat(suppliersCache.map(s=>({value:s.id,label:s.name})))},
+    {name:"catalog_item_id",label:"Attach to catalog item",type:"select",options:[{value:"",label:"— none —"}].concat(itemsCache.map(i=>({value:i.id,label:i.name})))},
+  ],async(v,form)=>{
+    const fi=form.querySelector('input[name="file"]');if(!fi.files.length)throw new Error("Please choose a file");
+    const file=fi.files[0];if(!v.supplier_id&&!v.catalog_item_id)throw new Error("Attach to a supplier and/or a catalog item");
+    const buf=await readFile(file,"buf");const blob=new Blob([buf],{type:file.type});
+    const isImg=isImageName(file.name);
+    await Documents.add({supplier_id:v.supplier_id?+v.supplier_id:null,catalog_item_id:v.catalog_item_id?+v.catalog_item_id:null,
+      filename:file.name,content_type:file.type||null,size_bytes:blob.size,kind:isImg?"image":"document",blob});
+    toast("Document uploaded");loadDocuments();});});
+window.deleteDocument=async id=>{if(!confirm("Delete this document?"))return;await Documents.del(id);toast("Document deleted");loadDocuments();};
+
+/* =========================================================================
+   13. Sample data (canvas-drawn images, no external files needed)
+   ========================================================================= */
+function swatch(text,color){const c=document.createElement("canvas");c.width=c.height=240;
+  const x=c.getContext("2d");x.fillStyle=color;x.fillRect(0,0,240,240);
+  x.strokeStyle="#fff";x.lineWidth=4;x.strokeRect(10,10,220,220);
+  x.fillStyle="#fff";x.font="bold 20px -apple-system,sans-serif";x.fillText(text,20,128);
+  return new Promise(res=>c.toBlob(res,"image/png"));}
+document.getElementById("load-samples").addEventListener("click",async()=>{
+  if((await Suppliers.all()).length&&!confirm("Add sample suppliers and items to your current data?"))return;
+  const sid=await Suppliers.add({name:"Shenzhen Components Co.",category:"Electronics",email:"sales@shenzhen-co.example"});
+  const hid=await Suppliers.add({name:"Mumbai Hardware Traders",category:"Hardware",email:"hello@mumbaihw.example"});
+  const elec=[["Resistor 10kΩ","RES-10K","Passives","reel"],["Capacitor 100nF","CAP-100N","Passives","reel"],
+    ["ATmega328P-PU","MCU-328P","Microcontrollers","tray"],["LM358 Op-Amp","IC-LM358","ICs","tube"]];
+  for(const [name,sku,cat,unit] of elec){const id=await Items.add({supplier_id:sid,name,sku,category:cat,unit,
+    description:"Sample part",attributes:{"Part Name":name,SKU:sku,Category:cat,UOM:unit,RoHS:"Yes"}});
+    await Quotes.add({catalog_item_id:id,unit_price:+(Math.random()*2+0.05).toFixed(2),currency:"USD",min_quantity:1000});}
+  const hw=[["Brass Hinge 3\"","HW-HINGE3","Hinges","pair","#b58a3d"],["SS Hex Bolt M8","HW-BOLTM8","Fasteners","box","#787c82"],
+    ["Cabinet Knob","HW-KNOB1","Handles","each","#28282c"]];
+  for(const [name,sku,cat,unit,color] of hw){const id=await Items.add({supplier_id:hid,name,sku,category:cat,unit,
+    description:"Sample hardware",attributes:{Name:name,SKU:sku,Category:cat,Unit:unit,Finish:"Standard"}});
+    await Quotes.add({catalog_item_id:id,unit_price:+(Math.random()*2+0.1).toFixed(2),currency:"USD",min_quantity:200});
+    const blob=await swatch(sku,color);
+    await Documents.add({supplier_id:hid,catalog_item_id:id,filename:sku+".png",content_type:"image/png",size_bytes:blob.size,kind:"image",blob});}
+  toast("Sample data loaded");loadSuppliers();refreshCounts();
+});
+
+/* =========================================================================
+   14. Bootstrap
+   ========================================================================= */
+loadSuppliers();
+refreshCounts();
+</script>
+</body>
+</html>

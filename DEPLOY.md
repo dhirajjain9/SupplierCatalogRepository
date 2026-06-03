@@ -1,0 +1,65 @@
+# Deploying for your team (Vercel + Postgres)
+
+This gives your team **one shared link** where everyone uploads and downloads the
+same catalog. Data lives in a managed Postgres database (shared by everyone);
+uploaded files/images are stored in that same database, so there is no
+filesystem to manage and it works on Vercel's serverless platform.
+
+> Access: the link is open to anyone who has it (no login), as requested. See
+> "Locking it down later" at the end if you want to add a password.
+
+## One-time setup (~10 minutes)
+
+### 1. Import the repo into Vercel
+1. Go to **https://vercel.com/new**.
+2. Import the GitHub repo **`dhirajjain9/suppliercatalogrepository`**.
+3. When asked for the branch, pick the one with this work (`claude/cool-johnson-Rc7FO`)
+   or merge it to `main` first. Vercel auto-detects `vercel.json` — just **Deploy**.
+
+The first deploy will succeed but show empty data (it's using a throwaway
+database until you add Postgres in the next step).
+
+### 2. Add a Postgres database
+1. In the new Vercel project → **Storage** tab → **Create Database** → **Postgres**.
+2. Accept the defaults and **connect it to this project**.
+3. Vercel automatically adds the connection environment variables (including
+   `POSTGRES_URL`) to the project. The app reads `POSTGRES_URL` (or `DATABASE_URL`)
+   automatically — no code changes needed.
+
+### 3. Redeploy
+Trigger a redeploy (Vercel → Deployments → ⋯ → Redeploy, or push a commit). On
+the first request the app creates its tables in Postgres automatically.
+
+### 4. Share the link
+Open the project's URL (e.g. `https://your-project.vercel.app`) and send it to
+your team. Everyone now reads/writes the same shared catalog.
+
+## How storage works
+- **Catalog, suppliers, quotes** → rows in Postgres.
+- **Uploaded files & product images** → stored as bytes in Postgres and served
+  back through `/api/documents/{id}/download`.
+- This keeps the app fully stateless, which is what Vercel's serverless
+  functions require.
+
+### Note on scale
+Storing images in Postgres is simple and reliable for a small team and product
+photos. If you later accumulate **many large images** (hundreds of MB+), the
+better home for them is **Vercel Blob** object storage. The upload path is
+centralized in `backend/services/storage.py`, so switching images to Blob later
+is an isolated change — ask and it can be added.
+
+Also use Vercel Postgres' **pooled** connection string (the default `POSTGRES_URL`)
+since serverless functions open many short-lived connections.
+
+## Locking it down later
+The link is currently open to anyone who has it. To add a single shared password
+(no per-user accounts), this can be done with a small middleware + a login screen —
+ask when you want it and it'll be wired in.
+
+## Running locally (optional)
+Without any database env vars the app uses a local SQLite file — handy for trying
+it on your own machine:
+```bash
+pip install -r requirements.txt
+./run.sh          # http://127.0.0.1:8000
+```

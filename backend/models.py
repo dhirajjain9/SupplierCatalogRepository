@@ -19,6 +19,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     JSON,
+    LargeBinary,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -112,8 +113,11 @@ class Document(Base):
     # "document" for generic attachments, "image" for product photos (marketing
     # collateral). Lets the UI show a gallery separately from spec sheets.
     kind: Mapped[str] = mapped_column(String(20), nullable=False, default="document", index=True)
-    # Path on disk where the uploaded file is stored (relative to the data dir).
-    stored_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    # File bytes are stored in the database so the app is stateless and works on
+    # serverless hosts (Vercel) with no local/persistent filesystem. ``stored_name``
+    # is retained (nullable) for backwards compatibility with disk-based rows.
+    data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    stored_name: Mapped[str | None] = mapped_column(String(300))
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     supplier: Mapped["Supplier | None"] = relationship(back_populates="documents")

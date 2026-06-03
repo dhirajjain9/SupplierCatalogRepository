@@ -6,16 +6,13 @@ supplier, a catalog item, or both.
 """
 from __future__ import annotations
 
-import os
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend import models, schemas
 from backend.database import get_db
-from backend.services.storage import UPLOAD_DIR, store_file
+from backend.services.storage import store_file
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -76,23 +73,20 @@ async def upload_document(
 
 
 @router.get("/{document_id}/download")
-def download_document(document_id: int, db: Session = Depends(get_db)) -> FileResponse:
+def download_document(document_id: int, db: Session = Depends(get_db)) -> Response:
     doc = _get_or_404(db, document_id)
-    path = os.path.join(UPLOAD_DIR, doc.stored_name)
-    if not os.path.exists(path):
+    if doc.data is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "File data missing on server")
-    return FileResponse(
-        path,
+    # ``inline`` so images render in <img> tags; the filename is still suggested.
+    return Response(
+        content=doc.data,
         media_type=doc.content_type or "application/octet-stream",
-        filename=doc.filename,
+        headers={"Content-Disposition": f'inline; filename="{doc.filename}"'},
     )
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(document_id: int, db: Session = Depends(get_db)) -> None:
     doc = _get_or_404(db, document_id)
-    path = os.path.join(UPLOAD_DIR, doc.stored_name)
-    if os.path.exists(path):
-        os.remove(path)
     db.delete(doc)
     db.commit()

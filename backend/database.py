@@ -6,17 +6,42 @@ from collections.abc import Generator
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
+from sqlalchemy.pool import NullPool
 
-# The database URL can be overridden (e.g. for tests). Defaults to a SQLite
-# file stored alongside the application data.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_DB_PATH = os.path.join(BASE_DIR, "data", "catalog.db")
-DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DEFAULT_DB_PATH}")
 
-# check_same_thread is required for SQLite when used with FastAPI's threadpool.
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args, future=True)
+def _resolve_url() -> str:
+    """Pick the database URL.
+
+    Prefers an explicit ``DATABASE_URL`` (or Vercel Postgres' ``POSTGRES_URL``).
+    Falls back to a local SQLite file for development/tests. ``postgres://`` and
+    ``postgresql://`` are normalized to the psycopg (v3) driver SQLAlchemy expects.
+    """
+    url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+    if not url:
+        # No Postgres configured: use SQLite. On Vercel the only writable path is
+        # /tmp (and it's ephemeral), so fall back there to at least boot.
+        path = "/tmp/catalog.db" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "data", "catalog.db")
+        return f"sqlite:///{path}"
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url[len("postgres://"):]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
+
+
+DATABASE_URL = _resolve_url()
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+# SQLite needs check_same_thread off under FastAPI's threadpool. On Postgres we
+# use NullPool so serverless invocations don't reuse stale/cross-instance
+# connections, and pre-ping to drop dead ones.
+if _is_sqlite:
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, future=True)
+else:
+    engine = create_engine(DATABASE_URL, poolclass=NullPool, pool_pre_ping=True, future=True)
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 
@@ -62,3 +87,6 @@ def _ensure_columns() -> None:
                     "ALTER TABLE documents ADD COLUMN kind VARCHAR(20) "
                     "NOT NULL DEFAULT 'document'"
                 ))
+            if "data" not in cols:
+                blob_type = "BYTEA" if engine.dialect.name == "postgresql" else "BLOB"
+                conn.execute(text(f"ALTER TABLE documents ADD COLUMN data {blob_type}"))

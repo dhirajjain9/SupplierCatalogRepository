@@ -1,18 +1,13 @@
-"""Shared on-disk storage for uploaded files (documents and product images).
+"""Build Document rows that carry their file bytes in the database.
 
-Files live under ``data/uploads`` with a collision-proof generated name; the
-``documents`` table keeps the metadata. Centralizing this here lets the document
-upload endpoint and the bulk image importer share one code path.
+Storing uploads in the database (rather than on local disk) keeps the app
+stateless, so it runs on serverless hosts like Vercel where the filesystem is
+ephemeral and shared state must live in the managed Postgres database. The
+document upload endpoint and the bulk image importer share this one helper.
 """
 from __future__ import annotations
 
-import os
-import uuid
-
 from backend import models
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(BASE_DIR, "data", "uploads"))
 
 
 def store_file(
@@ -24,20 +19,16 @@ def store_file(
     catalog_item_id: int | None = None,
     kind: str = "document",
 ) -> models.Document:
-    """Write ``contents`` to the upload dir and return an un-persisted Document.
+    """Return an un-persisted Document holding the file bytes.
 
-    The caller is responsible for adding it to the session and committing.
+    The caller adds it to the session and commits.
     """
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    stored_name = f"{uuid.uuid4().hex}_{os.path.basename(filename or 'file')}"
-    with open(os.path.join(UPLOAD_DIR, stored_name), "wb") as fh:
-        fh.write(contents)
     return models.Document(
         supplier_id=supplier_id,
         catalog_item_id=catalog_item_id,
-        filename=filename or stored_name,
+        filename=filename or "file",
         content_type=content_type,
         size_bytes=len(contents),
         kind=kind,
-        stored_name=stored_name,
+        data=contents,
     )
