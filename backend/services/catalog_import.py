@@ -32,8 +32,21 @@ HEADER_ALIASES: dict[str, set[str]] = {
 # Reverse lookup: alias -> canonical field.
 _ALIAS_TO_FIELD = {alias: field for field, aliases in HEADER_ALIASES.items() for alias in aliases}
 
+# Supplier columns a catalog/quotation file may carry, so the supplier can be
+# created automatically on import instead of as a required first step.
+SUPPLIER_ALIASES: dict[str, set[str]] = {
+    "name": {"supplier", "supplier name", "vendor", "vendor name", "manufacturer",
+             "brand", "company", "seller", "supplier/vendor"},
+    "email": {"supplier email", "vendor email", "supplier e-mail"},
+    "phone": {"supplier phone", "vendor phone", "supplier contact number", "supplier mobile"},
+    "contact_name": {"supplier contact", "contact person", "sales contact", "contact name"},
+    "category": {"supplier category", "supplier type"},
+    "address": {"supplier address", "vendor address"},
+}
+_SUPPLIER_ALIAS_TO_FIELD = {a: f for f, al in SUPPLIER_ALIASES.items() for a in al}
+
 TEMPLATE_HEADERS = [
-    "Name", "SKU", "Unit", "Category", "Description",
+    "Supplier", "Name", "SKU", "Unit", "Category", "Description",
     "Unit Price", "Currency", "Min Quantity",
 ]
 
@@ -50,6 +63,11 @@ class ParsedRow:
     min_quantity: int = 1
     # 1-based source row number (header is row 1); used to align embedded images.
     source_row: int = 0
+    # Supplier the row belongs to, when the file names one (so the supplier can
+    # be created/looked up during import). ``supplier_info`` holds optional
+    # contact details (email/phone/…) also pulled from the file.
+    supplier_name: str | None = None
+    supplier_info: dict[str, str] = field(default_factory=dict)
     # Verbatim copy of the whole source row, keyed by original header — every
     # column is preserved here, including ones with no typed mapping.
     attributes: dict[str, str] = field(default_factory=dict)
@@ -74,6 +92,13 @@ def canonical_header(raw: str | None) -> str | None:
     if raw is None:
         return None
     return _ALIAS_TO_FIELD.get(str(raw).strip().lower())
+
+
+def supplier_header(raw: str | None) -> str | None:
+    """Map a header to a supplier field (name/email/phone/…), or None."""
+    if raw is None:
+        return None
+    return _SUPPLIER_ALIAS_TO_FIELD.get(str(raw).strip().lower())
 
 
 def _clean(value) -> str | None:
@@ -121,6 +146,14 @@ def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
         if canon and canon not in col_map.values():
             col_map[idx] = canon
 
+    # Column index -> supplier field (kept separate so supplier columns don't
+    # get mistaken for item fields).
+    supplier_map: dict[int, str] = {}
+    for idx, h in enumerate(headers):
+        sup = supplier_header(h)
+        if sup and sup not in supplier_map.values():
+            supplier_map[idx] = sup
+
     for offset, raw in enumerate(raw_rows):
         row_no = offset + 2  # +1 for header, +1 for 1-based
 
@@ -160,6 +193,16 @@ def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
         row.unit = values.get("unit")
         row.category = values.get("category")
         row.description = values.get("description")
+
+        # Supplier details carried by the row (if any).
+        for idx, sup_field in supplier_map.items():
+            val = _clean(raw[idx]) if idx < len(raw) else None
+            if not val:
+                continue
+            if sup_field == "name":
+                row.supplier_name = val
+            else:
+                row.supplier_info[sup_field] = val
 
         price_raw = values.get("unit_price")
         if price_raw is not None:
@@ -282,6 +325,6 @@ def template_csv() -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(TEMPLATE_HEADERS)
-    writer.writerow(["Resistor 10k", "R10K", "each", "Passives",
+    writer.writerow(["Acme Components", "Resistor 10k", "R10K", "each", "Passives",
                      "1/4W 5% carbon film", "0.05", "USD", "1000"])
     return buf.getvalue()

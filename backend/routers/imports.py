@@ -1,24 +1,24 @@
-"""Bulk import endpoints for a supplier's catalog, quotations and images.
+"""Bulk import endpoints for catalogs, quotations and images.
 
-Step 1 — catalog import (CSV/XLSX/PDF): each parsed row becomes (or updates) a
-CatalogItem, matched on (supplier_id, sku). Every original column is preserved
-in ``attributes``. Rows that already carry a price also record a Quote, and
-images embedded in an .xlsx are attached to their row's item.
+Suppliers are resolved automatically: a catalog/quotation file may carry a
+``Supplier`` column (and optional contact columns), so the supplier is created
+or looked up during import — adding a supplier is no longer a required first
+step. A supplier can also be supplied via the form (an existing ``supplier_id``
+or a new ``supplier_name``), which acts as the default for rows that don't name
+one themselves.
 
-Step 2 — quotation import: a later price list is matched to existing items by
-SKU and its price/MOQ are recorded as Quotes (price history), without touching
-the catalog itself.
-
-Images — a zip of photos (or a single image) is matched to items by the SKU in
-each file name and stored as image documents for marketing collateral.
+Endpoints come in two flavours:
+  * ``/api/catalog-import`` etc.                — supplier-agnostic (resolve from file/form)
+  * ``/api/suppliers/{id}/catalog-import`` etc. — pin every row to one supplier
 """
 from __future__ import annotations
 
+import io
 import zipfile
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend import models, schemas
@@ -28,12 +28,73 @@ from backend.services.storage import store_file
 
 router = APIRouter(prefix="/api", tags=["import"])
 
+_SUPPLIER_FIELDS = ("email", "phone", "contact_name", "category", "address")
 
+
+# --------------------------------------------------------------------------- #
+# Supplier resolution
+# --------------------------------------------------------------------------- #
 def _require_supplier(db: Session, supplier_id: int) -> models.Supplier:
     supplier = db.get(models.Supplier, supplier_id)
     if supplier is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Supplier not found")
     return supplier
+
+
+def _existing_supplier(db: Session, name: str) -> models.Supplier | None:
+    return db.scalar(
+        select(models.Supplier).where(func.lower(models.Supplier.name) == name.strip().lower())
+    )
+
+
+class _SupplierResolver:
+    """Find-or-create suppliers by name within a single import, caching results
+    and counting how many were newly created."""
+
+    def __init__(self, db: Session, default: models.Supplier | None):
+        self.db = db
+        self.default = default
+        self.created = 0
+        self._cache: dict[str, models.Supplier] = {}
+        if default is not None:
+            self._cache[default.name.strip().lower()] = default
+
+    def resolve(self, name: str | None, info: dict | None = None) -> models.Supplier | None:
+        """Supplier for a row: the named one (created if needed), else the default."""
+        name = (name or "").strip()
+        if not name:
+            return self.default
+        key = name.lower()
+        supplier = self._cache.get(key) or _existing_supplier(self.db, name)
+        if supplier is None:
+            supplier = models.Supplier(name=name)
+            self.db.add(supplier)
+            self.created += 1
+        # Enrich blank contact fields from the file when available.
+        for f in _SUPPLIER_FIELDS:
+            if info and info.get(f) and not getattr(supplier, f, None):
+                setattr(supplier, f, info[f])
+        self.db.flush()
+        self._cache[key] = supplier
+        return supplier
+
+
+def _form_default_supplier(
+    db: Session, supplier_id: int | None, supplier_name: str | None
+) -> tuple[models.Supplier | None, int]:
+    """Resolve the optional form-level supplier. Returns (supplier, created_count)."""
+    if supplier_id is not None:
+        return _require_supplier(db, supplier_id), 0
+    name = (supplier_name or "").strip()
+    if name:
+        existing = _existing_supplier(db, name)
+        if existing:
+            return existing, 0
+        supplier = models.Supplier(name=name)
+        db.add(supplier)
+        db.flush()
+        return supplier, 1
+    return None, 0
 
 
 def _parse_or_400(file: UploadFile, data: bytes) -> catalog_import.ImportResult:
@@ -43,40 +104,42 @@ def _parse_or_400(file: UploadFile, data: bytes) -> catalog_import.ImportResult:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
 
-@router.get("/catalog-import/template", response_class=PlainTextResponse)
-def download_template() -> PlainTextResponse:
-    """Return a CSV template suppliers/users can fill in and re-upload."""
-    return PlainTextResponse(
-        catalog_import.template_csv(),
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="catalog-template.csv"'},
-    )
-
-
-@router.post("/suppliers/{supplier_id}/catalog-import", response_model=schemas.ImportSummary)
-async def import_catalog(
-    supplier_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+# --------------------------------------------------------------------------- #
+# Core import routines (shared by both endpoint styles)
+# --------------------------------------------------------------------------- #
+def _run_catalog_import(
+    db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None,
+    suppliers_pre_created: int = 0,
 ) -> schemas.ImportSummary:
-    _require_supplier(db, supplier_id)
-    data = await file.read()
     result = _parse_or_400(file, data)
+    resolver = _SupplierResolver(db, default_supplier)
+
+    has_file_supplier = any(r.supplier_name for r in result.rows)
+    if default_supplier is None and not has_file_supplier:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No supplier found. Add a 'Supplier' column to your file, or choose/enter "
+            "a supplier when importing.",
+        )
 
     items_created = items_updated = quotes_created = 0
+    warnings = list(result.warnings)
     row_to_item: dict[int, models.CatalogItem] = {}
 
     for row in result.rows:
+        supplier = resolver.resolve(row.supplier_name, row.supplier_info)
+        if supplier is None:
+            warnings.append({"row": row.source_row, "warning": "No supplier for this row; skipped"})
+            continue
+
         item = None
         if row.sku:
-            item = db.scalar(
-                select(models.CatalogItem).where(
-                    models.CatalogItem.supplier_id == supplier_id,
-                    models.CatalogItem.sku == row.sku,
-                )
-            )
+            item = db.scalar(select(models.CatalogItem).where(
+                models.CatalogItem.supplier_id == supplier.id,
+                models.CatalogItem.sku == row.sku,
+            ))
         if item is None:
-            item = models.CatalogItem(supplier_id=supplier_id, name=row.name, sku=row.sku)
+            item = models.CatalogItem(supplier_id=supplier.id, name=row.name, sku=row.sku)
             db.add(item)
             items_created += 1
         else:
@@ -86,8 +149,8 @@ async def import_catalog(
         item.unit = row.unit
         item.category = row.category
         item.description = row.description
-        item.attributes = row.attributes  # full original row, every column
-        db.flush()  # ensure item.id is available
+        item.attributes = row.attributes
+        db.flush()
         row_to_item[row.source_row] = item
 
         if row.has_price:
@@ -97,8 +160,6 @@ async def import_catalog(
             ))
             quotes_created += 1
 
-    # Attach images embedded in an .xlsx to their row's item (matched by SKU
-    # via the anchor row).
     images_attached = 0
     if (file.filename or "").lower().endswith(".xlsx"):
         for img in images.extract_xlsx_images(data):
@@ -107,35 +168,28 @@ async def import_catalog(
                 continue
             db.add(store_file(
                 img.data, img.filename, img.content_type,
-                supplier_id=supplier_id, catalog_item_id=item.id, kind="image",
+                supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
             ))
             images_attached += 1
 
     db.commit()
-
     return schemas.ImportSummary(
-        supplier_id=supplier_id,
+        supplier_id=default_supplier.id if default_supplier else None,
         rows_captured=len(result.rows),
         items_created=items_created,
         items_updated=items_updated,
         quotes_created=quotes_created,
+        suppliers_created=resolver.created + suppliers_pre_created,
         images_attached=images_attached,
-        rows_with_warnings=len(result.warnings),
-        warnings=[schemas.ImportWarning(**w) for w in result.warnings],
+        rows_with_warnings=len(warnings),
+        warnings=[schemas.ImportWarning(**w) for w in warnings],
     )
 
 
-@router.post("/suppliers/{supplier_id}/quotation-import", response_model=schemas.QuotationSummary)
-async def import_quotation(
-    supplier_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+def _run_quotation_import(
+    db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None
 ) -> schemas.QuotationSummary:
-    """Attach prices/MOQ from a quotation to existing catalog items (by SKU)."""
-    _require_supplier(db, supplier_id)
-    data = await file.read()
     result = _parse_or_400(file, data)
-
     quotes_created = rows_unmatched = rows_without_price = 0
     matched_items: set[int] = set()
     warnings = list(result.warnings)
@@ -145,12 +199,12 @@ async def import_quotation(
             rows_unmatched += 1
             warnings.append({"row": row.source_row, "warning": "No SKU; cannot match to catalog"})
             continue
-        item = db.scalar(
-            select(models.CatalogItem).where(
-                models.CatalogItem.supplier_id == supplier_id,
-                models.CatalogItem.sku == row.sku,
-            )
-        )
+        # Scope matching to the row's supplier (if named & known) else the default.
+        scope = _existing_supplier(db, row.supplier_name) if row.supplier_name else default_supplier
+        stmt = select(models.CatalogItem).where(models.CatalogItem.sku == row.sku)
+        if scope is not None:
+            stmt = stmt.where(models.CatalogItem.supplier_id == scope.id)
+        item = db.scalars(stmt).first()
         if item is None:
             rows_unmatched += 1
             warnings.append({"row": row.source_row, "warning": f"SKU {row.sku!r} not in catalog"})
@@ -167,9 +221,8 @@ async def import_quotation(
         matched_items.add(item.id)
 
     db.commit()
-
     return schemas.QuotationSummary(
-        supplier_id=supplier_id,
+        supplier_id=default_supplier.id if default_supplier else None,
         quotes_created=quotes_created,
         items_matched=len(matched_items),
         rows_unmatched=rows_unmatched,
@@ -178,23 +231,12 @@ async def import_quotation(
     )
 
 
-@router.post("/suppliers/{supplier_id}/images-import", response_model=schemas.ImageImportSummary)
-async def import_images(
-    supplier_id: int,
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
+def _run_images_import(
+    db: Session, file: UploadFile, data: bytes, supplier_id: int | None
 ) -> schemas.ImageImportSummary:
-    """Match product images to catalog items by the SKU in each file name.
-
-    Accepts a .zip of images or a single image file.
-    """
-    _require_supplier(db, supplier_id)
-    data = await file.read()
     name = (file.filename or "").lower()
-
     if name.endswith(".zip"):
         extracted = images.extract_zip_images(data)
-        # Report non-image entries that were skipped.
         skipped = _zip_non_images(data)
     elif images.is_image(name):
         extracted = [images.ExtractedImage(
@@ -217,11 +259,10 @@ async def import_images(
             continue
         db.add(store_file(
             img.data, img.filename, img.content_type,
-            supplier_id=supplier_id, catalog_item_id=item.id, kind="image",
+            supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
         ))
         stored += 1
     db.commit()
-
     return schemas.ImageImportSummary(
         supplier_id=supplier_id,
         images_stored=stored,
@@ -230,22 +271,21 @@ async def import_images(
     )
 
 
-def _find_item_for_image(db: Session, supplier_id: int, filename: str) -> models.CatalogItem | None:
+def _find_item_for_image(
+    db: Session, supplier_id: int | None, filename: str
+) -> models.CatalogItem | None:
+    """Match an image to an item by the SKU in its name, scoped to a supplier if given."""
     for sku in images.sku_candidates(filename):
-        item = db.scalar(
-            select(models.CatalogItem).where(
-                models.CatalogItem.supplier_id == supplier_id,
-                models.CatalogItem.sku == sku,
-            )
-        )
+        stmt = select(models.CatalogItem).where(models.CatalogItem.sku == sku)
+        if supplier_id is not None:
+            stmt = stmt.where(models.CatalogItem.supplier_id == supplier_id)
+        item = db.scalars(stmt).first()
         if item is not None:
             return item
     return None
 
 
 def _zip_non_images(data: bytes) -> list[str]:
-    import io
-
     skipped: list[str] = []
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for info in zf.infolist():
@@ -255,3 +295,73 @@ def _zip_non_images(data: bytes) -> list[str]:
             if not images.is_image(info.filename):
                 skipped.append(base)
     return skipped
+
+
+# --------------------------------------------------------------------------- #
+# Endpoints — supplier-agnostic (resolve supplier from the file/form)
+# --------------------------------------------------------------------------- #
+@router.get("/catalog-import/template", response_class=PlainTextResponse)
+def download_template() -> PlainTextResponse:
+    return PlainTextResponse(
+        catalog_import.template_csv(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="catalog-template.csv"'},
+    )
+
+
+@router.post("/catalog-import", response_model=schemas.ImportSummary)
+async def import_catalog_auto(
+    file: UploadFile = File(...),
+    supplier_id: int | None = Form(default=None),
+    supplier_name: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> schemas.ImportSummary:
+    default, created = _form_default_supplier(db, supplier_id, supplier_name)
+    return _run_catalog_import(db, file, await file.read(), default, created)
+
+
+@router.post("/quotation-import", response_model=schemas.QuotationSummary)
+async def import_quotation_auto(
+    file: UploadFile = File(...),
+    supplier_id: int | None = Form(default=None),
+    supplier_name: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> schemas.QuotationSummary:
+    default, _ = _form_default_supplier(db, supplier_id, supplier_name)
+    return _run_quotation_import(db, file, await file.read(), default)
+
+
+@router.post("/images-import", response_model=schemas.ImageImportSummary)
+async def import_images_auto(
+    file: UploadFile = File(...),
+    supplier_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> schemas.ImageImportSummary:
+    if supplier_id is not None:
+        _require_supplier(db, supplier_id)
+    return _run_images_import(db, file, await file.read(), supplier_id)
+
+
+# --------------------------------------------------------------------------- #
+# Endpoints — pinned to a specific supplier (kept for direct/per-supplier use)
+# --------------------------------------------------------------------------- #
+@router.post("/suppliers/{supplier_id}/catalog-import", response_model=schemas.ImportSummary)
+async def import_catalog(
+    supplier_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),
+) -> schemas.ImportSummary:
+    return _run_catalog_import(db, file, await file.read(), _require_supplier(db, supplier_id))
+
+
+@router.post("/suppliers/{supplier_id}/quotation-import", response_model=schemas.QuotationSummary)
+async def import_quotation(
+    supplier_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),
+) -> schemas.QuotationSummary:
+    return _run_quotation_import(db, file, await file.read(), _require_supplier(db, supplier_id))
+
+
+@router.post("/suppliers/{supplier_id}/images-import", response_model=schemas.ImageImportSummary)
+async def import_images(
+    supplier_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),
+) -> schemas.ImageImportSummary:
+    _require_supplier(db, supplier_id)
+    return _run_images_import(db, file, await file.read(), supplier_id)

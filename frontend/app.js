@@ -414,22 +414,32 @@ function warningList(warnings) {
   return `<ul class="errs">${items}${more}</ul>`;
 }
 
-// Generic upload modal: pick a supplier + file, POST it, then render a summary.
-function openUploadModal({ title, action, accept, fileLabel, renderSummary, extraFooter }) {
+// Generic upload modal. Supplier is OPTIONAL: it can come from a "Supplier"
+// column in the file, or be chosen/typed here — adding a supplier first is not
+// required. `supplierMode`: "name" shows existing-picker + new-name field
+// (catalog/quotation); "scope" shows only an optional existing-picker (images).
+function openUploadModal({ title, action, accept, fileLabel, renderSummary, extraFooter, supplierMode }) {
+  const fields = [
+    { name: "supplier_id", label: "Supplier (optional)", type: "select",
+      options: [{ value: "", label: "— Auto-detect from file —" }]
+        .concat(suppliersCache.map((s) => ({ value: s.id, label: s.name }))) },
+  ];
+  if (supplierMode === "name") {
+    fields.push({ name: "supplier_name", label: "…or new supplier name (optional)" });
+  }
+  fields.push({ name: "file", label: fileLabel, type: "file", required: true, accept });
+
   openModal(
     title,
-    [
-      { name: "supplier_id", label: "Supplier", type: "select", required: true,
-        options: suppliersCache.map((s) => ({ value: s.id, label: s.name })) },
-      { name: "file", label: fileLabel, type: "file", required: true, accept },
-    ],
+    fields,
     async (v, form) => {
       const fileInput = form.querySelector('input[name="file"]');
       if (!fileInput.files.length) throw new Error("Please choose a file");
       const fd = new FormData();
       fd.append("file", fileInput.files[0]);
-      const res = await fetch(`/api/suppliers/${v.supplier_id}/${action}`,
-        { method: "POST", body: fd });
+      if (v.supplier_id) fd.append("supplier_id", v.supplier_id);
+      if (v.supplier_name && v.supplier_name.trim()) fd.append("supplier_name", v.supplier_name.trim());
+      const res = await fetch(`/api/${action}`, { method: "POST", body: fd });
       const summary = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(summary.detail || "Import failed");
       document.getElementById("modal-title").textContent = "Import Complete";
@@ -437,6 +447,7 @@ function openUploadModal({ title, action, accept, fileLabel, renderSummary, extr
       document.getElementById("modal-fields").innerHTML = renderSummary(summary);
       onSubmit = async () => {};  // next "Save" just closes
       loadCatalog();
+      refreshCounts();
       return false;               // keep modal open to show the summary
     },
     extraFooter || ""
@@ -445,10 +456,10 @@ function openUploadModal({ title, action, accept, fileLabel, renderSummary, extr
 
 document.getElementById("import-catalog").addEventListener("click", async () => {
   await ensureSuppliers();
-  if (!suppliersCache.length) return toast("Add a supplier first", true);
   openUploadModal({
     title: "Import Catalog",
     action: "catalog-import",
+    supplierMode: "name",
     accept: ".csv,.xlsx,.pdf",
     fileLabel: "Catalog file (.csv, .xlsx, .pdf)",
     extraFooter: `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`,
@@ -457,8 +468,9 @@ document.getElementById("import-catalog").addEventListener("click", async () => 
          <strong>${s.items_created}</strong> created,
          <strong>${s.items_updated}</strong> updated,
          <strong>${s.quotes_created}</strong> quotes,
-         <strong>${s.images_attached || 0}</strong> images.</p>
-      <p class="muted">Every column from the file is stored on each item.</p>
+         <strong>${s.images_attached || 0}</strong> images${
+           s.suppliers_created ? `, <strong>${s.suppliers_created}</strong> new supplier(s)` : ""}.</p>
+      <p class="muted">Tip: include a “Supplier” column to file items under different suppliers.</p>
       ${s.rows_with_warnings
           ? `<p>${s.rows_with_warnings} row(s) imported with warnings:</p>${warningList(s.warnings)}`
           : `<p>No warnings. 🎉</p>`}`,
@@ -467,10 +479,10 @@ document.getElementById("import-catalog").addEventListener("click", async () => 
 
 document.getElementById("import-quotation").addEventListener("click", async () => {
   await ensureSuppliers();
-  if (!suppliersCache.length) return toast("Add a supplier first", true);
   openUploadModal({
     title: "Import Quotation (Step 2)",
     action: "quotation-import",
+    supplierMode: "name",
     accept: ".csv,.xlsx,.pdf",
     fileLabel: "Quotation file with SKU + price + MOQ",
     renderSummary: (s) => `
@@ -486,10 +498,10 @@ document.getElementById("import-quotation").addEventListener("click", async () =
 
 document.getElementById("import-images").addEventListener("click", async () => {
   await ensureSuppliers();
-  if (!suppliersCache.length) return toast("Add a supplier first", true);
   openUploadModal({
     title: "Import Product Images",
     action: "images-import",
+    supplierMode: "scope",
     accept: ".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
     fileLabel: "A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
     renderSummary: (s) => {

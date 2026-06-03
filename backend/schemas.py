@@ -129,11 +129,12 @@ class ImportWarning(BaseModel):
 
 
 class ImportSummary(BaseModel):
-    supplier_id: int
+    supplier_id: int | None = None      # set when the import targets one supplier
     rows_captured: int       # every non-empty row in the file is imported
     items_created: int
     items_updated: int
     quotes_created: int
+    suppliers_created: int = 0  # suppliers auto-created from the file/form
     images_attached: int = 0  # images embedded in an .xlsx that matched a row
     rows_with_warnings: int  # imported, but a value couldn't be typed
     warnings: list[ImportWarning] = []
@@ -141,7 +142,7 @@ class ImportSummary(BaseModel):
 
 class QuotationSummary(BaseModel):
     """Step 2: attach prices/MOQ from a quotation onto existing catalog items."""
-    supplier_id: int
+    supplier_id: int | None = None
     quotes_created: int
     items_matched: int       # distinct catalog items a quote was attached to
     rows_unmatched: int      # rows whose SKU wasn't found in the catalog
@@ -150,7 +151,7 @@ class QuotationSummary(BaseModel):
 
 
 class ImageImportSummary(BaseModel):
-    supplier_id: int
+    supplier_id: int | None = None
     images_stored: int
     images_unmatched: list[str] = []  # filenames whose SKU had no catalog item
     files_skipped: list[str] = []     # non-image entries that were ignored
