@@ -258,6 +258,7 @@ async function loadCatalog() {
         <td>${esc(supplierName(i.supplier_id))}</td><td>${esc(i.unit)}</td>
         <td>${i.category ? `<span class="pill">${esc(i.category)}</span>` : ""}</td>
         <td class="right">
+          <button class="btn link" onclick="viewImages(${i.id})">Photos</button>
           ${i.attributes && Object.keys(i.attributes).length
               ? `<button class="btn link" onclick="viewAttributes(${i.id})">Columns</button>` : ""}
           <button class="btn link" onclick="editItem(${i.id})">Edit</button>
@@ -276,6 +277,20 @@ window.viewAttributes = function (id) {
   openModal("Original Columns — " + item.name, [], async () => {});
   document.getElementById("modal-fields").innerHTML =
     `<table class="attrs"><tbody>${rows}</tbody></table>`;
+  document.getElementById("modal-extra").innerHTML = "";
+};
+
+window.viewImages = async function (id) {
+  const item = itemsCache.find((x) => x.id === id);
+  const docs = await api.get(`/api/documents?catalog_item_id=${id}&kind=image`);
+  openModal("Photos — " + (item ? item.name : id), [], async () => {});
+  const grid = docs.length
+    ? `<div class="gallery">${docs
+        .map((d) => `<a href="/api/documents/${d.id}/download" target="_blank" title="${esc(d.filename)}">
+            <img src="/api/documents/${d.id}/download" alt="${esc(d.filename)}" /></a>`)
+        .join("")}</div>`
+    : `<p class="muted">No images yet. Use “Import Images” to attach photos by SKU.</p>`;
+  document.getElementById("modal-fields").innerHTML = grid;
   document.getElementById("modal-extra").innerHTML = "";
 };
 
@@ -328,63 +343,104 @@ document.getElementById("catalog-category-filter").addEventListener("change", lo
 document.getElementById("catalog-search").addEventListener("input", debounce(loadCatalog, 250));
 
 // --------------------------------------------------------------------------- //
-// Catalog import (CSV / XLSX / PDF)
+// Imports: catalog (CSV/XLSX/PDF), quotation (Step 2) and product images
 // --------------------------------------------------------------------------- //
-document.getElementById("import-catalog").addEventListener("click", async () => {
-  await ensureSuppliers();
-  if (!suppliersCache.length) return toast("Add a supplier first", true);
+function warningList(warnings) {
+  if (!warnings || !warnings.length) return "";
+  const items = warnings.slice(0, 20).map((w) => `<li>Row ${w.row}: ${esc(w.warning)}</li>`).join("");
+  const more = warnings.length > 20 ? `<li>…and ${warnings.length - 20} more</li>` : "";
+  return `<ul class="errs">${items}${more}</ul>`;
+}
+
+// Generic upload modal: pick a supplier + file, POST it, then render a summary.
+function openUploadModal({ title, action, accept, fileLabel, renderSummary, extraFooter }) {
   openModal(
-    "Import Catalog",
+    title,
     [
-      {
-        name: "supplier_id", label: "Supplier", type: "select", required: true,
-        options: suppliersCache.map((s) => ({ value: s.id, label: s.name })),
-      },
-      { name: "file", label: "Catalog file (.csv, .xlsx, .pdf)", type: "file",
-        required: true, accept: ".csv,.xlsx,.pdf" },
+      { name: "supplier_id", label: "Supplier", type: "select", required: true,
+        options: suppliersCache.map((s) => ({ value: s.id, label: s.name })) },
+      { name: "file", label: fileLabel, type: "file", required: true, accept },
     ],
     async (v, form) => {
       const fileInput = form.querySelector('input[name="file"]');
       if (!fileInput.files.length) throw new Error("Please choose a file");
       const fd = new FormData();
       fd.append("file", fileInput.files[0]);
-      const res = await fetch(
-        `/api/suppliers/${v.supplier_id}/catalog-import`,
-        { method: "POST", body: fd }
-      );
+      const res = await fetch(`/api/suppliers/${v.supplier_id}/${action}`,
+        { method: "POST", body: fd });
       const summary = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(summary.detail || "Import failed");
-      showImportSummary(summary);
+      document.getElementById("modal-title").textContent = "Import Complete";
+      document.getElementById("modal-extra").innerHTML = "";
+      document.getElementById("modal-fields").innerHTML = renderSummary(summary);
+      onSubmit = async () => {};  // next "Save" just closes
       loadCatalog();
-      return false; // keep modal open to display the summary
+      return false;               // keep modal open to show the summary
     },
-    // Extra footer content: a link to download the CSV template.
-    `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`
+    extraFooter || ""
   );
+}
+
+document.getElementById("import-catalog").addEventListener("click", async () => {
+  await ensureSuppliers();
+  if (!suppliersCache.length) return toast("Add a supplier first", true);
+  openUploadModal({
+    title: "Import Catalog",
+    action: "catalog-import",
+    accept: ".csv,.xlsx,.pdf",
+    fileLabel: "Catalog file (.csv, .xlsx, .pdf)",
+    extraFooter: `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`,
+    renderSummary: (s) => `
+      <p><strong>${s.rows_captured}</strong> row(s) captured —
+         <strong>${s.items_created}</strong> created,
+         <strong>${s.items_updated}</strong> updated,
+         <strong>${s.quotes_created}</strong> quotes,
+         <strong>${s.images_attached || 0}</strong> images.</p>
+      <p class="muted">Every column from the file is stored on each item.</p>
+      ${s.rows_with_warnings
+          ? `<p>${s.rows_with_warnings} row(s) imported with warnings:</p>${warningList(s.warnings)}`
+          : `<p>No warnings. 🎉</p>`}`,
+  });
 });
 
-function showImportSummary(s) {
-  const warns = (s.warnings || [])
-    .slice(0, 20)
-    .map((w) => `<li>Row ${w.row}: ${esc(w.warning)}</li>`)
-    .join("");
-  const more = s.warnings && s.warnings.length > 20
-    ? `<li>…and ${s.warnings.length - 20} more</li>` : "";
-  document.getElementById("modal-title").textContent = "Import Complete";
-  document.getElementById("modal-extra").innerHTML = "";
-  document.getElementById("modal-fields").innerHTML = `
-    <p><strong>${s.rows_captured}</strong> row(s) captured —
-       <strong>${s.items_created}</strong> created,
-       <strong>${s.items_updated}</strong> updated,
-       <strong>${s.quotes_created}</strong> quotes recorded.</p>
-    <p class="muted">Every column from the file is stored on each item.</p>
-    ${s.rows_with_warnings
-        ? `<p>${s.rows_with_warnings} row(s) imported with warnings:</p>
-           <ul class="errs">${warns}${more}</ul>`
-        : `<p>No warnings. 🎉</p>`}`;
-  // Swap the form's submit handler so "Save" simply closes the summary.
-  onSubmit = async () => {};
-}
+document.getElementById("import-quotation").addEventListener("click", async () => {
+  await ensureSuppliers();
+  if (!suppliersCache.length) return toast("Add a supplier first", true);
+  openUploadModal({
+    title: "Import Quotation (Step 2)",
+    action: "quotation-import",
+    accept: ".csv,.xlsx,.pdf",
+    fileLabel: "Quotation file with SKU + price + MOQ",
+    renderSummary: (s) => `
+      <p><strong>${s.quotes_created}</strong> quote(s) recorded across
+         <strong>${s.items_matched}</strong> catalog item(s).</p>
+      <p class="muted">Rows are matched to existing items by SKU.</p>
+      ${(s.rows_unmatched || s.rows_without_price)
+          ? `<p>${s.rows_unmatched} unmatched, ${s.rows_without_price} without a price:</p>
+             ${warningList(s.warnings)}`
+          : `<p>All rows matched. 🎉</p>`}`,
+  });
+});
+
+document.getElementById("import-images").addEventListener("click", async () => {
+  await ensureSuppliers();
+  if (!suppliersCache.length) return toast("Add a supplier first", true);
+  openUploadModal({
+    title: "Import Product Images",
+    action: "images-import",
+    accept: ".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
+    fileLabel: "A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
+    renderSummary: (s) => {
+      const unmatched = (s.images_unmatched || []).map((f) => `<li>${esc(f)}</li>`).join("");
+      const skipped = (s.files_skipped || []).map((f) => `<li>${esc(f)}</li>`).join("");
+      return `
+        <p><strong>${s.images_stored}</strong> image(s) matched to products by SKU.</p>
+        ${unmatched ? `<p>No matching SKU for:</p><ul class="errs">${unmatched}</ul>` : ""}
+        ${skipped ? `<p class="muted">Skipped non-images:</p><ul class="errs">${skipped}</ul>` : ""}
+        ${!unmatched && !skipped ? `<p>All images matched. 🎉</p>` : ""}`;
+    },
+  });
+});
 
 // --------------------------------------------------------------------------- //
 // Quotes

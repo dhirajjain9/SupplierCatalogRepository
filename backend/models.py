@@ -109,6 +109,9 @@ class Document(Base):
     filename: Mapped[str] = mapped_column(String(300), nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(120))
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    # "document" for generic attachments, "image" for product photos (marketing
+    # collateral). Lets the UI show a gallery separately from spec sheets.
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="document", index=True)
     # Path on disk where the uploaded file is stored (relative to the data dir).
     stored_name: Mapped[str] = mapped_column(String(300), nullable=False)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

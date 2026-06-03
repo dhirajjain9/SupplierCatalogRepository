@@ -47,6 +47,8 @@ class ParsedRow:
     unit_price: float | None = None
     currency: str = "USD"
     min_quantity: int = 1
+    # 1-based source row number (header is row 1); used to align embedded images.
+    source_row: int = 0
     # Verbatim copy of the whole source row, keyed by original header — every
     # column is preserved here, including ones with no typed mapping.
     attributes: dict[str, str] = field(default_factory=dict)
@@ -152,7 +154,7 @@ def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
                     {"row": row_no, "warning": f"Missing name; using {name!r}"}
                 )
 
-        row = ParsedRow(name=name, attributes=attributes)
+        row = ParsedRow(name=name, attributes=attributes, source_row=row_no)
         row.sku = values.get("sku")
         row.unit = values.get("unit")
         row.category = values.get("category")

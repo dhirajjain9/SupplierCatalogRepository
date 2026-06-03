@@ -10,3 +10,4 @@ pdfplumber>=0.11   # .pdf table extraction
 pytest>=8.0
 httpx>=0.27
 reportlab>=4.0     # generate sample PDFs in tests
+Pillow>=10.0       # generate sample images in tests (also a pdfplumber dep)

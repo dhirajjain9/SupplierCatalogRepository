@@ -116,6 +116,7 @@ class DocumentOut(BaseModel):
     filename: str
     content_type: str | None = None
     size_bytes: int
+    kind: str = "document"
     uploaded_at: datetime
 
 
@@ -133,5 +134,23 @@ class ImportSummary(BaseModel):
     items_created: int
     items_updated: int
     quotes_created: int
+    images_attached: int = 0  # images embedded in an .xlsx that matched a row
     rows_with_warnings: int  # imported, but a value couldn't be typed
     warnings: list[ImportWarning] = []
+
+
+class QuotationSummary(BaseModel):
+    """Step 2: attach prices/MOQ from a quotation onto existing catalog items."""
+    supplier_id: int
+    quotes_created: int
+    items_matched: int       # distinct catalog items a quote was attached to
+    rows_unmatched: int      # rows whose SKU wasn't found in the catalog
+    rows_without_price: int  # matched rows that carried no usable price
+    warnings: list[ImportWarning] = []
+
+
+class ImageImportSummary(BaseModel):
+    supplier_id: int
+    images_stored: int
+    images_unmatched: list[str] = []  # filenames whose SKU had no catalog item
+    files_skipped: list[str] = []     # non-image entries that were ignored

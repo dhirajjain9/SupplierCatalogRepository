@@ -7,7 +7,6 @@ supplier, a catalog item, or both.
 from __future__ import annotations
 
 import os
-import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -16,11 +15,9 @@ from sqlalchemy.orm import Session
 
 from backend import models, schemas
 from backend.database import get_db
+from backend.services.storage import UPLOAD_DIR, store_file
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(BASE_DIR, "data", "uploads"))
 
 
 def _get_or_404(db: Session, document_id: int) -> models.Document:
@@ -35,12 +32,15 @@ def list_documents(
     db: Session = Depends(get_db),
     supplier_id: int | None = Query(default=None),
     catalog_item_id: int | None = Query(default=None),
+    kind: str | None = Query(default=None, description="Filter by 'document' or 'image'"),
 ) -> list[models.Document]:
     stmt = select(models.Document).order_by(models.Document.uploaded_at.desc())
     if supplier_id is not None:
         stmt = stmt.where(models.Document.supplier_id == supplier_id)
     if catalog_item_id is not None:
         stmt = stmt.where(models.Document.catalog_item_id == catalog_item_id)
+    if kind is not None:
+        stmt = stmt.where(models.Document.kind == kind)
     return list(db.scalars(stmt).all())
 
 
@@ -61,21 +61,13 @@ async def upload_document(
     if catalog_item_id is not None and db.get(models.CatalogItem, catalog_item_id) is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "catalog_item_id does not exist")
 
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    stored_name = f"{uuid.uuid4().hex}_{os.path.basename(file.filename or 'file')}"
-    dest_path = os.path.join(UPLOAD_DIR, stored_name)
-
     contents = await file.read()
-    with open(dest_path, "wb") as fh:
-        fh.write(contents)
-
-    doc = models.Document(
+    doc = store_file(
+        contents,
+        file.filename or "file",
+        file.content_type,
         supplier_id=supplier_id,
         catalog_item_id=catalog_item_id,
-        filename=file.filename or stored_name,
-        content_type=file.content_type,
-        size_bytes=len(contents),
-        stored_name=stored_name,
     )
     db.add(doc)
     db.commit()

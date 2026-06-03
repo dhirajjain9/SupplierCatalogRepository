@@ -49,9 +49,16 @@ def _ensure_columns() -> None:
     hand. Keeps older SQLite files working without a full migration tool.
     """
     inspector = inspect(engine)
-    if "catalog_items" not in inspector.get_table_names():
-        return
-    existing = {c["name"] for c in inspector.get_columns("catalog_items")}
-    if "attributes" not in existing:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE catalog_items ADD COLUMN attributes JSON"))
+    tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        if "catalog_items" in tables:
+            cols = {c["name"] for c in inspector.get_columns("catalog_items")}
+            if "attributes" not in cols:
+                conn.execute(text("ALTER TABLE catalog_items ADD COLUMN attributes JSON"))
+        if "documents" in tables:
+            cols = {c["name"] for c in inspector.get_columns("documents")}
+            if "kind" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE documents ADD COLUMN kind VARCHAR(20) "
+                    "NOT NULL DEFAULT 'document'"
+                ))
