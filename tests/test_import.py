@@ -14,19 +14,21 @@ def test_header_aliases_map_to_canonical():
     assert ci.canonical_header("Unknown Column") is None
 
 
-def test_normalize_rows_validates_and_coerces():
+def test_normalize_rows_captures_every_row_and_coerces():
     headers = ["Name", "SKU", "Price", "Currency", "Min Qty", "Type"]
     rows = [
         ["Widget", "W1", "$1,234.50", "eur", "100", "Hardware"],  # ok, messy price/ccy
-        ["", "W2", "5", "USD", "1", "Hardware"],                  # missing name
-        ["Gadget", "G1", "notanumber", "USD", "1", "Tools"],      # bad price
-        ["Gizmo", "G2", "9.99", "US", "1", "Tools"],              # bad currency
-        ["Sprocket", "S1", "3.00", "USD", "0", "Tools"],          # bad min qty
+        ["", "W2", "5", "USD", "1", "Hardware"],                  # missing name -> falls back to sku
+        ["Gadget", "G1", "notanumber", "USD", "1", "Tools"],      # bad price -> warning, kept
+        ["Gizmo", "G2", "9.99", "US", "1", "Tools"],              # bad currency -> warning, kept
+        ["Sprocket", "S1", "3.00", "USD", "0", "Tools"],          # bad min qty -> warning, kept
         ["Cog", "C1", "", "", "", "Tools"],                        # ok, no price
     ]
     result = ci.normalize_rows(headers, rows)
 
-    assert len(result.rows) == 2
+    # Every non-empty row is captured — nothing is dropped.
+    assert len(result.rows) == 6
+
     widget = result.rows[0]
     assert widget.name == "Widget"
     assert widget.unit_price == 1234.5
@@ -34,19 +36,40 @@ def test_normalize_rows_validates_and_coerces():
     assert widget.min_quantity == 100
     assert widget.category == "Hardware"
     assert widget.has_price
+    # The full original row is preserved, keyed by header.
+    assert widget.attributes["Price"] == "$1,234.50"
+    assert widget.attributes["Type"] == "Hardware"
 
-    cog = result.rows[1]
-    assert cog.name == "Cog"
-    assert cog.has_price is False
+    # Missing-name row falls back to the SKU value.
+    assert result.rows[1].name == "W2"
 
-    failed_rows = {e["row"] for e in result.errors}
-    assert failed_rows == {3, 4, 5, 6}
+    # Bad price/currency/min-qty rows are kept with safe defaults.
+    gadget = result.rows[2]
+    assert gadget.unit_price is None and gadget.attributes["Price"] == "notanumber"
+    assert result.rows[3].currency == "USD"   # invalid 'US' -> default
+    assert result.rows[4].min_quantity == 1   # invalid '0' -> default
+
+    warned_rows = {w["row"] for w in result.warnings}
+    assert warned_rows == {3, 4, 5, 6}  # row 3 = missing name, 4 price, 5 ccy, 6 min qty
 
 
-def test_normalize_rows_requires_name_column():
-    result = ci.normalize_rows(["Foo", "Bar"], [["a", "b"]])
-    assert result.rows == []
-    assert "Name" in result.errors[0]["error"]
+def test_normalize_rows_captures_unknown_columns():
+    # No recognized 'name' column at all: rows are still captured in full.
+    headers = ["Foo", "Bar"]
+    result = ci.normalize_rows(headers, [["a", "b"], ["c", "d"]])
+    assert len(result.rows) == 2
+    assert result.rows[0].name == "a"  # first non-empty cell
+    assert result.rows[0].attributes == {"Foo": "a", "Bar": "b"}
+
+
+def test_blank_and_duplicate_headers_are_preserved():
+    headers = ["Name", "", "Note", "Note"]
+    result = ci.normalize_rows(headers, [["Item", "x", "n1", "n2"]])
+    attrs = result.rows[0].attributes
+    assert attrs["Name"] == "Item"
+    assert attrs["Column 2"] == "x"     # blank header
+    assert attrs["Note"] == "n1"
+    assert attrs["Note (2)"] == "n2"    # duplicate header disambiguated
 
 
 def test_parse_csv_roundtrip():
@@ -113,11 +136,16 @@ def test_import_endpoint_creates_items_and_quotes(client):
     s = r.json()
     assert s["items_created"] == 3
     assert s["quotes_created"] == 2
-    assert s["rows_failed"] == 0
+    assert s["rows_with_warnings"] == 0
+    assert s["rows_captured"] == 3
 
     # Items now searchable and category filterable.
-    assert len(client.get(f"/api/catalog-items?supplier_id={sid}").json()) == 3
+    items = client.get(f"/api/catalog-items?supplier_id={sid}").json()
+    assert len(items) == 3
     assert "Fasteners" in client.get("/api/catalog-items/categories").json()
+    # Original columns are preserved on each item.
+    bolt = next(i for i in items if i["name"] == "Bolt M3")
+    assert bolt["attributes"]["Unit Price"] == "0.10"
 
 
 def test_import_upserts_on_sku(client):
@@ -143,16 +171,22 @@ def test_import_upserts_on_sku(client):
     assert len(client.get(f"/api/quotes?catalog_item_id={items[0]['id']}").json()) == 2
 
 
-def test_import_reports_row_errors(client):
+def test_import_keeps_rows_with_warnings(client):
     sid = _make_supplier(client)
     csv_data = "Name,Unit Price\nGood,1.00\nBad,abc\n"
     r = client.post(
         f"/api/suppliers/{sid}/catalog-import",
         files={"file": ("c.csv", csv_data.encode(), "text/csv")},
     ).json()
-    assert r["items_created"] == 1
-    assert r["rows_failed"] == 1
-    assert r["errors"][0]["row"] == 3
+    # Both rows are imported; the bad price is a warning, not a drop.
+    assert r["items_created"] == 2
+    assert r["quotes_created"] == 1
+    assert r["rows_with_warnings"] == 1
+    assert r["warnings"][0]["row"] == 3
+
+    items = client.get(f"/api/catalog-items?supplier_id={sid}").json()
+    bad = next(i for i in items if i["name"] == "Bad")
+    assert bad["attributes"]["Unit Price"] == "abc"  # raw value retained
 
 
 def test_import_unknown_supplier_404(client):

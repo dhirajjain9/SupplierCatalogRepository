@@ -47,6 +47,9 @@ class ParsedRow:
     unit_price: float | None = None
     currency: str = "USD"
     min_quantity: int = 1
+    # Verbatim copy of the whole source row, keyed by original header — every
+    # column is preserved here, including ones with no typed mapping.
+    attributes: dict[str, str] = field(default_factory=dict)
 
     @property
     def has_price(self) -> bool:
@@ -56,7 +59,8 @@ class ParsedRow:
 @dataclass
 class ImportResult:
     rows: list[ParsedRow] = field(default_factory=list)
-    errors: list[dict] = field(default_factory=list)  # {"row": int, "error": str}
+    # Non-fatal: the row is still imported, but a value couldn't be typed.
+    warnings: list[dict] = field(default_factory=list)  # {"row": int, "warning": str}
 
 
 class UnsupportedFileType(Exception):
@@ -76,45 +80,79 @@ def _clean(value) -> str | None:
     return s or None
 
 
-def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
-    """Map headers to canonical fields and validate each raw row.
+def _label_headers(headers: list) -> list[str]:
+    """Turn the raw header cells into stable, unique, non-empty labels.
 
-    ``headers`` and each entry of ``raw_rows`` are positional lists of cells.
-    Row numbers in errors are 1-based and count the header as row 1.
+    Blank headers become ``Column N`` and duplicates get a numeric suffix so the
+    attributes dict never silently collapses two source columns into one.
+    """
+    labels: list[str] = []
+    seen: dict[str, int] = {}
+    for idx, h in enumerate(headers):
+        base = _clean(h) or f"Column {idx + 1}"
+        if base in seen:
+            seen[base] += 1
+            base = f"{base} ({seen[base]})"
+        else:
+            seen[base] = 1
+        labels.append(base)
+    return labels
+
+
+def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
+    """Map headers to canonical fields while preserving every row and column.
+
+    Each non-empty row produces exactly one ``ParsedRow`` whose ``attributes``
+    holds the complete original record. Recognized columns are additionally
+    parsed into typed fields; values that fail to parse are recorded as warnings
+    but never cause the row (or the file) to be dropped. Row numbers in warnings
+    are 1-based and count the header as row 1.
     """
     result = ImportResult()
+    labels = _label_headers(headers)
 
-    # Column index -> canonical field name.
+    # Column index -> canonical field name (first match wins per field).
     col_map: dict[int, str] = {}
     for idx, h in enumerate(headers):
         canon = canonical_header(h)
         if canon and canon not in col_map.values():
             col_map[idx] = canon
 
-    if "name" not in col_map.values():
-        result.errors.append({
-            "row": 1,
-            "error": "Could not find a 'Name' column. Recognized headers: "
-                     + ", ".join(sorted(_ALIAS_TO_FIELD)),
-        })
-        return result
-
     for offset, raw in enumerate(raw_rows):
         row_no = offset + 2  # +1 for header, +1 for 1-based
-        values: dict[str, str | None] = {}
-        for idx, field_name in col_map.items():
-            values[field_name] = _clean(raw[idx]) if idx < len(raw) else None
 
-        # Skip completely blank rows silently.
-        if not any(values.values()):
+        # Full-fidelity capture of every column in this row.
+        attributes: dict[str, str] = {}
+        for idx, label in enumerate(labels):
+            cell = _clean(raw[idx]) if idx < len(raw) else None
+            if cell is not None:
+                attributes[label] = cell
+        # Any extra cells beyond the header count still get captured.
+        for idx in range(len(labels), len(raw)):
+            cell = _clean(raw[idx])
+            if cell is not None:
+                attributes[f"Column {idx + 1}"] = cell
+
+        # Skip only rows that are entirely empty.
+        if not attributes:
             continue
 
+        # Pull recognized fields by column index.
+        values: dict[str, str | None] = {
+            field_name: (_clean(raw[idx]) if idx < len(raw) else None)
+            for idx, field_name in col_map.items()
+        }
+
+        # Name: use the mapped column, else fall back so the row is never lost.
         name = values.get("name")
         if not name:
-            result.errors.append({"row": row_no, "error": "Missing required 'name'"})
-            continue
+            name = values.get("sku") or next(iter(attributes.values()))
+            if "name" in col_map.values():
+                result.warnings.append(
+                    {"row": row_no, "warning": f"Missing name; using {name!r}"}
+                )
 
-        row = ParsedRow(name=name)
+        row = ParsedRow(name=name, attributes=attributes)
         row.sku = values.get("sku")
         row.unit = values.get("unit")
         row.category = values.get("category")
@@ -126,38 +164,35 @@ def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
                 # Tolerate currency symbols / thousands separators.
                 cleaned = price_raw.replace(",", "").lstrip("$€£ ").strip()
                 price = float(cleaned)
+                if price < 0:
+                    raise ValueError("negative")
+                row.unit_price = price
             except ValueError:
-                result.errors.append(
-                    {"row": row_no, "error": f"Invalid unit_price: {price_raw!r}"}
+                result.warnings.append(
+                    {"row": row_no, "warning": f"Unparseable unit_price {price_raw!r}; "
+                                               "stored in attributes only"}
                 )
-                continue
-            if price < 0:
-                result.errors.append({"row": row_no, "error": "unit_price cannot be negative"})
-                continue
-            row.unit_price = price
 
         currency = values.get("currency")
         if currency:
-            if len(currency) != 3 or not currency.isalpha():
-                result.errors.append(
-                    {"row": row_no, "error": f"Invalid currency: {currency!r} (use a 3-letter code)"}
+            if len(currency) == 3 and currency.isalpha():
+                row.currency = currency.upper()
+            else:
+                result.warnings.append(
+                    {"row": row_no, "warning": f"Invalid currency {currency!r}; defaulting to USD"}
                 )
-                continue
-            row.currency = currency.upper()
 
         min_qty = values.get("min_quantity")
         if min_qty is not None:
             try:
                 qty = int(float(min_qty))
+                if qty < 1:
+                    raise ValueError("too small")
+                row.min_quantity = qty
             except ValueError:
-                result.errors.append(
-                    {"row": row_no, "error": f"Invalid min_quantity: {min_qty!r}"}
+                result.warnings.append(
+                    {"row": row_no, "warning": f"Invalid min_quantity {min_qty!r}; defaulting to 1"}
                 )
-                continue
-            if qty < 1:
-                result.errors.append({"row": row_no, "error": "min_quantity must be >= 1"})
-                continue
-            row.min_quantity = qty
 
         result.rows.append(row)
 

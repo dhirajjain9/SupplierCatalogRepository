@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 
 # The database URL can be overridden (e.g. for tests). Defaults to a SQLite
@@ -39,3 +39,19 @@ def init_db() -> None:
     from backend import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    """Tiny additive migration for columns added after a DB was first created.
+
+    create_all() never alters existing tables, so add new nullable columns by
+    hand. Keeps older SQLite files working without a full migration tool.
+    """
+    inspector = inspect(engine)
+    if "catalog_items" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("catalog_items")}
+    if "attributes" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE catalog_items ADD COLUMN attributes JSON"))

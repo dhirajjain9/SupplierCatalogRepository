@@ -70,6 +70,7 @@ async def import_catalog(
         item.unit = row.unit
         item.category = row.category
         item.description = row.description
+        item.attributes = row.attributes  # full original row, every column
         db.flush()  # ensure item.id is available for the quote
 
         if row.has_price:
@@ -87,10 +88,10 @@ async def import_catalog(
 
     return schemas.ImportSummary(
         supplier_id=supplier_id,
-        rows_parsed=len(result.rows),
+        rows_captured=len(result.rows),
         items_created=items_created,
         items_updated=items_updated,
         quotes_created=quotes_created,
-        rows_failed=len(result.errors),
-        errors=[schemas.ImportError(**e) for e in result.errors],
+        rows_with_warnings=len(result.warnings),
+        warnings=[schemas.ImportWarning(**w) for w in result.warnings],
     )

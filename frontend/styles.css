@@ -112,6 +112,12 @@ td.right { white-space: nowrap; }
 .modal-foot .spacer { flex: 1; }
 #modal-fields .errs { margin: 4px 0 0 18px; color: var(--danger); font-size: 13px; }
 #modal-fields .errs li { margin-bottom: 2px; }
+#modal-fields .muted { color: var(--muted, #6b7280); font-size: 13px; margin-top: -4px; }
+table.attrs { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.attrs th { text-align: left; padding: 6px 12px 6px 0; color: var(--muted, #6b7280);
+  white-space: nowrap; vertical-align: top; font-weight: 600; }
+table.attrs td { padding: 6px 0; border-bottom: 1px solid var(--border); }
+table.attrs th { border-bottom: 1px solid var(--border); }
 
 /* Toast */
 .toast {

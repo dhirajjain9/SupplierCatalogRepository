@@ -258,12 +258,26 @@ async function loadCatalog() {
         <td>${esc(supplierName(i.supplier_id))}</td><td>${esc(i.unit)}</td>
         <td>${i.category ? `<span class="pill">${esc(i.category)}</span>` : ""}</td>
         <td class="right">
+          ${i.attributes && Object.keys(i.attributes).length
+              ? `<button class="btn link" onclick="viewAttributes(${i.id})">Columns</button>` : ""}
           <button class="btn link" onclick="editItem(${i.id})">Edit</button>
           <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
         </td></tr>`
     )
     .join("");
 }
+
+window.viewAttributes = function (id) {
+  const item = itemsCache.find((x) => x.id === id);
+  if (!item || !item.attributes) return;
+  const rows = Object.entries(item.attributes)
+    .map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`)
+    .join("");
+  openModal("Original Columns — " + item.name, [], async () => {});
+  document.getElementById("modal-fields").innerHTML =
+    `<table class="attrs"><tbody>${rows}</tbody></table>`;
+  document.getElementById("modal-extra").innerHTML = "";
+};
 
 function itemFields(i = {}) {
   return [
@@ -350,20 +364,24 @@ document.getElementById("import-catalog").addEventListener("click", async () => 
 });
 
 function showImportSummary(s) {
-  const errs = (s.errors || [])
+  const warns = (s.warnings || [])
     .slice(0, 20)
-    .map((e) => `<li>Row ${e.row}: ${esc(e.error)}</li>`)
+    .map((w) => `<li>Row ${w.row}: ${esc(w.warning)}</li>`)
     .join("");
-  const more = s.errors && s.errors.length > 20
-    ? `<li>…and ${s.errors.length - 20} more</li>` : "";
+  const more = s.warnings && s.warnings.length > 20
+    ? `<li>…and ${s.warnings.length - 20} more</li>` : "";
   document.getElementById("modal-title").textContent = "Import Complete";
   document.getElementById("modal-extra").innerHTML = "";
   document.getElementById("modal-fields").innerHTML = `
-    <p><strong>${s.items_created}</strong> items created,
+    <p><strong>${s.rows_captured}</strong> row(s) captured —
+       <strong>${s.items_created}</strong> created,
        <strong>${s.items_updated}</strong> updated,
        <strong>${s.quotes_created}</strong> quotes recorded.</p>
-    ${s.rows_failed ? `<p>${s.rows_failed} row(s) skipped:</p><ul class="errs">${errs}${more}</ul>`
-                    : `<p>No errors. 🎉</p>`}`;
+    <p class="muted">Every column from the file is stored on each item.</p>
+    ${s.rows_with_warnings
+        ? `<p>${s.rows_with_warnings} row(s) imported with warnings:</p>
+           <ul class="errs">${warns}${more}</ul>`
+        : `<p>No warnings. 🎉</p>`}`;
   // Swap the form's submit handler so "Save" simply closes the summary.
   onSubmit = async () => {};
 }

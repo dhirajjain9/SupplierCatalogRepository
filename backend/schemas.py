@@ -67,6 +67,9 @@ class CatalogItemOut(CatalogItemBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     supplier_id: int
+    # Full original imported row (every source column), when the item came
+    # from a file import.
+    attributes: dict | None = None
     created_at: datetime
 
 
@@ -119,16 +122,16 @@ class DocumentOut(BaseModel):
 # --------------------------------------------------------------------------- #
 # Catalog import
 # --------------------------------------------------------------------------- #
-class ImportError(BaseModel):
+class ImportWarning(BaseModel):
     row: int
-    error: str
+    warning: str
 
 
 class ImportSummary(BaseModel):
     supplier_id: int
-    rows_parsed: int        # rows that passed validation
+    rows_captured: int       # every non-empty row in the file is imported
     items_created: int
     items_updated: int
     quotes_created: int
-    rows_failed: int
-    errors: list[ImportError] = []
+    rows_with_warnings: int  # imported, but a value couldn't be typed
+    warnings: list[ImportWarning] = []

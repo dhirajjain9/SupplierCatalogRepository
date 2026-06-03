@@ -18,6 +18,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    JSON,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -60,6 +61,10 @@ class CatalogItem(Base):
     description: Mapped[str | None] = mapped_column(Text)
     unit: Mapped[str | None] = mapped_column(String(50))
     category: Mapped[str | None] = mapped_column(String(120), index=True)
+    # Full fidelity copy of the original imported row: every column from the
+    # source file (including ones that don't map to a typed field above) keyed
+    # by its original header. Ensures no data from the upload is lost.
+    attributes: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     supplier: Mapped["Supplier"] = relationship(back_populates="catalog_items")
