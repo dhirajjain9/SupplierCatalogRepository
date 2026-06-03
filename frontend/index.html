@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supplier Catalog Repository</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">📦</span>
+      <div>
+        <h1>Supplier Catalog Repository</h1>
+        <p class="subtitle">Catalogs &amp; quotes from your suppliers, in one place</p>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="suppliers">Suppliers</button>
+    <button class="tab" data-tab="catalog">Catalog Items</button>
+    <button class="tab" data-tab="quotes">Quotes</button>
+    <button class="tab" data-tab="documents">Documents</button>
+  </nav>
+
+  <main>
+    <!-- Suppliers -->
+    <section id="suppliers" class="panel active">
+      <div class="panel-head">
+        <h2>Suppliers</h2>
+        <div class="actions">
+          <input type="search" id="supplier-search" placeholder="Search by name…" />
+          <button class="btn primary" id="add-supplier">+ Add Supplier</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="suppliers-table">
+        <thead><tr>
+          <th>Name</th><th>Contact</th><th>Email</th><th>Phone</th>
+          <th>Category</th><th class="right">Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- Catalog -->
+    <section id="catalog" class="panel">
+      <div class="panel-head">
+        <h2>Catalog Items</h2>
+        <div class="actions">
+          <select id="catalog-supplier-filter"><option value="">All suppliers</option></select>
+          <input type="search" id="catalog-search" placeholder="Search name / SKU…" />
+          <button class="btn primary" id="add-item">+ Add Item</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="catalog-table">
+        <thead><tr>
+          <th>Name</th><th>SKU</th><th>Supplier</th><th>Unit</th>
+          <th>Category</th><th class="right">Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- Quotes -->
+    <section id="quotes" class="panel">
+      <div class="panel-head">
+        <h2>Quotes</h2>
+        <div class="actions">
+          <select id="quote-item-filter"><option value="">All catalog items</option></select>
+          <button class="btn primary" id="add-quote">+ Add Quote</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="quotes-table">
+        <thead><tr>
+          <th>Item</th><th>Unit Price</th><th>Min Qty</th><th>Valid From</th>
+          <th>Valid Until</th><th class="right">Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- Documents -->
+    <section id="documents" class="panel">
+      <div class="panel-head">
+        <h2>Documents</h2>
+        <div class="actions">
+          <button class="btn primary" id="add-document">+ Upload Document</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="documents-table">
+        <thead><tr>
+          <th>File</th><th>Type</th><th>Size</th><th>Supplier</th>
+          <th>Item</th><th class="right">Actions</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+  </main>
+
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head"><h3 id="modal-title">Form</h3>
+        <button class="icon-btn" id="modal-close">✕</button></div>
+      <form id="modal-form"><div id="modal-fields"></div>
+        <div class="modal-foot">
+          <button type="button" class="btn" id="modal-cancel">Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

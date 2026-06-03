@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Database & uploads (runtime data)
+*.db
+*.sqlite3
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Test / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
