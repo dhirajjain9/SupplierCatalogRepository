@@ -165,17 +165,25 @@ function closeModal() {
 }
 document.getElementById("modal-close").addEventListener("click", closeModal);
 document.getElementById("modal-cancel").addEventListener("click", closeModal);
+let modalSubmitting = false;
 document.getElementById("modal-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (modalSubmitting) return;  // ignore double-clicks / repeat submits
   const form = e.target;
+  const saveBtn = form.querySelector('button[type=submit]');
   const values = {};
   new FormData(form).forEach((v, k) => (values[k] = v));
+  modalSubmitting = true;
+  if (saveBtn) saveBtn.disabled = true;
   try {
     // A handler may return false to keep the modal open (e.g. to show a summary).
     const keepOpen = await onSubmit(values, form);
     if (keepOpen !== false) closeModal();
   } catch (err) {
     toast(err.message, true);
+  } finally {
+    modalSubmitting = false;
+    if (saveBtn) saveBtn.disabled = false;
   }
 });
 

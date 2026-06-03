@@ -104,6 +104,26 @@ def test_catalog_import_rows_json_batch(client):
     assert len(client.get("/api/suppliers").json()) == 1
 
 
+def test_catalog_import_rows_dedupes_skuless_items_by_name(client):
+    # SKU-less items (e.g. AI/image catalogs) dedupe by name within a supplier,
+    # both within one import and across re-imports / double-submits.
+    payload = {"supplier_name": "Suzhou", "rows": [
+        {"name": "Mop Pad", "attributes": {"Material": "Microfiber"}},
+        {"name": "mop pad", "attributes": {}},   # same name, different case
+        {"name": "Towel", "attributes": {}},
+    ]}
+    r1 = client.post("/api/catalog-import/rows", json=payload).json()
+    assert r1["items_created"] == 2   # Mop Pad + Towel (the dup collapsed)
+
+    # Re-running the same import (or a double-submit) must not pile up.
+    r2 = client.post("/api/catalog-import/rows", json=payload).json()
+    assert r2["items_created"] == 0
+    assert r2["items_updated"] >= 2
+
+    sid = next(s["id"] for s in _suppliers(client) if s["name"] == "Suzhou")
+    assert len(client.get(f"/api/catalog-items?supplier_id={sid}").json()) == 2
+
+
 def test_quotation_import_rows_json(client):
     client.post("/api/catalog-import/rows", json={
         "rows": [{"name": "Bolt", "sku": "B-1", "supplier_name": "Acme", "attributes": {}}]

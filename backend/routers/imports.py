@@ -143,6 +143,14 @@ def _persist_catalog(
                 models.CatalogItem.supplier_id == supplier.id,
                 models.CatalogItem.sku == row.sku,
             ))
+        elif row.name:
+            # No SKU (e.g. AI/image catalogs): de-duplicate by name within the
+            # supplier so re-imports update in place instead of piling up.
+            item = db.scalar(select(models.CatalogItem).where(
+                models.CatalogItem.supplier_id == supplier.id,
+                models.CatalogItem.sku.is_(None),
+                func.lower(models.CatalogItem.name) == row.name.strip().lower(),
+            ))
         if item is None:
             item = models.CatalogItem(supplier_id=supplier.id, name=row.name, sku=row.sku)
             db.add(item)
