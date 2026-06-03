@@ -24,6 +24,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
+# Some serverless runtimes (e.g. Vercel) don't run ASGI lifespan events, so also
+# initialize the schema at import time. create_all/_ensure_columns are idempotent.
+init_db()
+
+
 app = FastAPI(
     title="Supplier Catalog Repository",
     description="Manage suppliers, their catalog items, price quotes and documents.",

@@ -1,3 +1,4 @@
+# Runtime dependencies (also used by the Vercel serverless function).
 fastapi>=0.110
 uvicorn[standard]>=0.27
 SQLAlchemy>=2.0
@@ -6,8 +7,4 @@ python-multipart>=0.0.9
 # Catalog import parsing
 openpyxl>=3.1      # .xlsx
 pdfplumber>=0.11   # .pdf table extraction
-# Test dependencies
-pytest>=8.0
-httpx>=0.27
-reportlab>=4.0     # generate sample PDFs in tests
-Pillow>=10.0       # generate sample images in tests (also a pdfplumber dep)
+Pillow>=10.0       # image handling (also a pdfplumber dependency)
