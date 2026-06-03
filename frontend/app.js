@@ -333,13 +333,20 @@ async function loadCatalog() {
   const url = "/api/catalog-items" + (params.toString() ? `?${params}` : "");
   itemsCache = await api.get(url);
 
-  // One request for image thumbnails, mapped to the first photo per item.
-  const thumbs = {};
+  // Thumbnails: prefer a product's own photo, else fall back to its source-page image.
+  const itemThumb = {}, pageThumb = {};
   try {
     (await api.get("/api/documents?kind=image")).forEach((d) => {
-      if (d.catalog_item_id && !thumbs[d.catalog_item_id]) thumbs[d.catalog_item_id] = d.id;
+      if (d.catalog_item_id) { if (!itemThumb[d.catalog_item_id]) itemThumb[d.catalog_item_id] = d.id; }
+      else if (d.supplier_id) {
+        const m = /page-(\d+)\./i.exec(d.filename || "");
+        if (m) pageThumb[`${d.supplier_id}|${m[1]}`] = d.id;
+      }
     });
   } catch (_) { /* thumbnails are optional */ }
+  const thumbFor = (i) => itemThumb[i.id]
+    || pageThumb[`${i.supplier_id}|${(i.attributes || {})["Source Page"]}`]
+    || null;
 
   if (!itemsCache.length) {
     const filtering = q || filter.value || catFilter.value;
@@ -352,11 +359,12 @@ async function loadCatalog() {
   }
 
   if (catalogView === "gallery") {
-    gallery.innerHTML = itemsCache.map((i) => catalogCard(i, thumbs[i.id])).join("");
+    gallery.innerHTML = itemsCache.map((i) => catalogCard(i, thumbFor(i))).join("");
   } else {
     tbody.innerHTML = itemsCache.map((i) => {
-      const thumb = thumbs[i.id]
-        ? `<img class="thumb" src="${imgUrl(thumbs[i.id])}" alt="" />`
+      const t = thumbFor(i);
+      const thumb = t
+        ? `<img class="thumb" src="${imgUrl(t)}" alt="" />`
         : `<span class="thumb thumb-ph">${ICONS.image}</span>`;
       return `<tr>
         <td><div class="cell-with-thumb">${thumb}<span>${esc(i.name)}</span></div></td>
@@ -856,27 +864,38 @@ async function runVisionFlow(file, supplier, renderSummary) {
     showModalBusy("Saving products to the catalog…");
     const summary = await importRowsBatched("catalog-import/rows", eff, { rows, warnings: [] });
     const ids = summary.item_ids || [];
+    const supId = await resolveSupplierId(supplier.id, supplierName);
 
-    // Crop + attach each product's photo, grouped by page (one bitmap per page).
-    let photos = 0;
-    const byPage = {};
-    rows.forEach((_, i) => { if (meta[i].box && ids[i]) (byPage[meta[i].pageIdx] = byPage[meta[i].pageIdx] || []).push(i); });
-    const pageIdxs = Object.keys(byPage);
-    let done = 0;
-    const total = pageIdxs.reduce((n, k) => n + byPage[k].length, 0);
+    // Which work units we have: one page-image per page that has products, plus
+    // one crop per product that came back with a box.
+    const pageIdxs = [...new Set(rows.map((_, i) => (ids[i] ? meta[i].pageIdx : null)).filter((v) => v !== null))];
+    const cropByPage = {};
+    rows.forEach((_, i) => { if (ids[i] && meta[i].box) (cropByPage[meta[i].pageIdx] = cropByPage[meta[i].pageIdx] || []).push(i); });
+    const total = pageIdxs.length + Object.values(cropByPage).reduce((n, a) => n + a.length, 0);
+    let step = 0, pageImgs = 0, crops = 0;
+
+    // 1) Source page image per page (guaranteed fallback so every card has a photo).
     for (const pk of pageIdxs) {
+      showModalBusy(`Saving page images… (${++step}/${total})`);
+      const fd = new FormData();
+      fd.append("file", new File([pageBlobs[pk]], `page-${pk + 1}.jpg`, { type: "image/jpeg" }));
+      if (supId) fd.append("supplier_id", supId);
+      const r = await fetch("/api/documents", { method: "POST", body: fd });
+      if (r.ok) pageImgs++;
+    }
+    // 2) Tight per-product crops where the AI gave a box.
+    for (const pk of Object.keys(cropByPage)) {
       let bitmap;
       try { bitmap = await createImageBitmap(pageBlobs[pk]); } catch (e) { continue; }
-      for (const i of byPage[pk]) {
-        showModalBusy(`Saving product photos… (${++done}/${total})`);
+      for (const i of cropByPage[pk]) {
+        showModalBusy(`Cropping product photos… (${++step}/${total})`);
         const blob = await cropToBlob(bitmap, meta[i].box);
-        if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) photos++;
+        if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) crops++;
       }
       bitmap.close && bitmap.close();
     }
-    summary.images_attached = (summary.images_attached || 0) + photos;
+    summary.images_attached = (summary.images_attached || 0) + pageImgs + crops;
 
-    const supId = await resolveSupplierId(supplier.id, supplierName);
     document.getElementById("modal-title").textContent = "Import Complete";
     document.getElementById("modal-fields").innerHTML = renderSummary(summary);
     document.getElementById("modal-extra").innerHTML = "";

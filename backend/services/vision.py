@@ -30,8 +30,10 @@ SYSTEM_PROMPT = (
     "supplier_name: the company/brand if clearly shown (mainly on the cover), "
     "else null. Do not invent SKUs or prices — this catalog has none.\n"
     "box: the bounding box of THIS product's main photo, as fractions of the page "
-    "from the top-left: x0,y0 = top-left corner, x1,y1 = bottom-right, each between "
-    "0 and 1 (e.g. [0.05, 0.3, 0.45, 0.8]). Use null if you can't localize a photo."
+    "from the top-left: [x0, y0, x1, y1] with x0,y0 = top-left corner and x1,y1 = "
+    "bottom-right, each between 0 and 1 (e.g. [0.05, 0.3, 0.45, 0.8]). ALWAYS provide "
+    "your best estimate of the box for every product that has a photo — approximate "
+    "is fine. Use null only if the product genuinely has no photo on the page."
 )
 
 USER_PROMPT = "Extract the products from this catalog page as JSON per the rules."
