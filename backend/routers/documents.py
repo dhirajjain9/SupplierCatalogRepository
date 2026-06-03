@@ -59,12 +59,15 @@ async def upload_document(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "catalog_item_id does not exist")
 
     contents = await file.read()
+    # Tag image uploads as images so they show as product/supplier photos.
+    kind = "image" if (file.content_type or "").startswith("image/") else "document"
     doc = store_file(
         contents,
         file.filename or "file",
         file.content_type,
         supplier_id=supplier_id,
         catalog_item_id=catalog_item_id,
+        kind=kind,
     )
     db.add(doc)
     db.commit()

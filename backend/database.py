@@ -90,3 +90,14 @@ def _ensure_columns() -> None:
             if "data" not in cols:
                 blob_type = "BYTEA" if engine.dialect.name == "postgresql" else "BLOB"
                 conn.execute(text(f"ALTER TABLE documents ADD COLUMN data {blob_type}"))
+            # Relabel image files that were stored as generic documents (so the
+            # catalog gallery, which filters on kind='image', picks them up).
+            mislabeled = conn.execute(text(
+                "SELECT COUNT(*) FROM documents WHERE kind = 'document' "
+                "AND content_type LIKE 'image/%'"
+            )).scalar()
+            if mislabeled:
+                conn.execute(text(
+                    "UPDATE documents SET kind = 'image' "
+                    "WHERE kind = 'document' AND content_type LIKE 'image/%'"
+                ))
