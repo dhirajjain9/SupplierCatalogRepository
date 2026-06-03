@@ -114,3 +114,21 @@ class DocumentOut(BaseModel):
     content_type: str | None = None
     size_bytes: int
     uploaded_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Catalog import
+# --------------------------------------------------------------------------- #
+class ImportError(BaseModel):
+    row: int
+    error: str
+
+
+class ImportSummary(BaseModel):
+    supplier_id: int
+    rows_parsed: int        # rows that passed validation
+    items_created: int
+    items_updated: int
+    quotes_created: int
+    rows_failed: int
+    errors: list[ImportError] = []

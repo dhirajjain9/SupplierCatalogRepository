@@ -79,8 +79,9 @@ function refreshTab(name) {
 // --------------------------------------------------------------------------- //
 let onSubmit = null;
 
-function openModal(title, fields, handler) {
+function openModal(title, fields, handler, extraFooterHtml = "") {
   document.getElementById("modal-title").textContent = title;
+  document.getElementById("modal-extra").innerHTML = extraFooterHtml;
   const container = document.getElementById("modal-fields");
   container.innerHTML = "";
   fields.forEach((f) => {
@@ -119,6 +120,7 @@ function openModal(title, fields, handler) {
 
 function closeModal() {
   document.getElementById("modal-overlay").classList.add("hidden");
+  document.getElementById("modal-extra").innerHTML = "";
   onSubmit = null;
 }
 document.getElementById("modal-close").addEventListener("click", closeModal);
@@ -129,8 +131,9 @@ document.getElementById("modal-form").addEventListener("submit", async (e) => {
   const values = {};
   new FormData(form).forEach((v, k) => (values[k] = v));
   try {
-    await onSubmit(values, form);
-    closeModal();
+    // A handler may return false to keep the modal open (e.g. to show a summary).
+    const keepOpen = await onSubmit(values, form);
+    if (keepOpen !== false) closeModal();
   } catch (err) {
     toast(err.message, true);
   }
@@ -226,9 +229,19 @@ async function loadCatalog() {
     suppliersCache.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
   filter.value = current;
 
+  // Populate the product-type (category) filter from distinct categories.
+  const catFilter = document.getElementById("catalog-category-filter");
+  const currentCat = catFilter.value;
+  const categories = await api.get("/api/catalog-items/categories");
+  catFilter.innerHTML =
+    `<option value="">All product types</option>` +
+    categories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  catFilter.value = currentCat;
+
   const q = document.getElementById("catalog-search").value.trim();
   const params = new URLSearchParams();
   if (filter.value) params.set("supplier_id", filter.value);
+  if (catFilter.value) params.set("category", catFilter.value);
   if (q) params.set("search", q);
   const url = "/api/catalog-items" + (params.toString() ? `?${params}` : "");
   itemsCache = await api.get(url);
@@ -297,7 +310,63 @@ window.deleteItem = async (id) => {
 };
 
 document.getElementById("catalog-supplier-filter").addEventListener("change", loadCatalog);
+document.getElementById("catalog-category-filter").addEventListener("change", loadCatalog);
 document.getElementById("catalog-search").addEventListener("input", debounce(loadCatalog, 250));
+
+// --------------------------------------------------------------------------- //
+// Catalog import (CSV / XLSX / PDF)
+// --------------------------------------------------------------------------- //
+document.getElementById("import-catalog").addEventListener("click", async () => {
+  await ensureSuppliers();
+  if (!suppliersCache.length) return toast("Add a supplier first", true);
+  openModal(
+    "Import Catalog",
+    [
+      {
+        name: "supplier_id", label: "Supplier", type: "select", required: true,
+        options: suppliersCache.map((s) => ({ value: s.id, label: s.name })),
+      },
+      { name: "file", label: "Catalog file (.csv, .xlsx, .pdf)", type: "file",
+        required: true, accept: ".csv,.xlsx,.pdf" },
+    ],
+    async (v, form) => {
+      const fileInput = form.querySelector('input[name="file"]');
+      if (!fileInput.files.length) throw new Error("Please choose a file");
+      const fd = new FormData();
+      fd.append("file", fileInput.files[0]);
+      const res = await fetch(
+        `/api/suppliers/${v.supplier_id}/catalog-import`,
+        { method: "POST", body: fd }
+      );
+      const summary = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(summary.detail || "Import failed");
+      showImportSummary(summary);
+      loadCatalog();
+      return false; // keep modal open to display the summary
+    },
+    // Extra footer content: a link to download the CSV template.
+    `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`
+  );
+});
+
+function showImportSummary(s) {
+  const errs = (s.errors || [])
+    .slice(0, 20)
+    .map((e) => `<li>Row ${e.row}: ${esc(e.error)}</li>`)
+    .join("");
+  const more = s.errors && s.errors.length > 20
+    ? `<li>…and ${s.errors.length - 20} more</li>` : "";
+  document.getElementById("modal-title").textContent = "Import Complete";
+  document.getElementById("modal-extra").innerHTML = "";
+  document.getElementById("modal-fields").innerHTML = `
+    <p><strong>${s.items_created}</strong> items created,
+       <strong>${s.items_updated}</strong> updated,
+       <strong>${s.quotes_created}</strong> quotes recorded.</p>
+    ${s.rows_failed ? `<p>${s.rows_failed} row(s) skipped:</p><ul class="errs">${errs}${more}</ul>`
+                    : `<p>No errors. 🎉</p>`}`;
+  // Swap the form's submit handler so "Save" simply closes the summary.
+  onSubmit = async () => {};
+}
 
 // --------------------------------------------------------------------------- //
 // Quotes

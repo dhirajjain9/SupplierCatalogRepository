@@ -107,8 +107,11 @@ td.right { white-space: nowrap; }
 .field label { font-size: 13px; font-weight: 500; color: var(--muted); }
 .field input, .field select, .field textarea { width: 100%; }
 .field textarea { resize: vertical; min-height: 60px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 10px;
+.modal-foot { display: flex; align-items: center; gap: 10px;
   padding: 16px 22px; border-top: 1px solid var(--border); }
+.modal-foot .spacer { flex: 1; }
+#modal-fields .errs { margin: 4px 0 0 18px; color: var(--danger); font-size: 13px; }
+#modal-fields .errs li { margin-bottom: 2px; }
 
 /* Toast */
 .toast {

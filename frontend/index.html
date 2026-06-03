@@ -48,8 +48,10 @@
       <div class="panel-head">
         <h2>Catalog Items</h2>
         <div class="actions">
+          <input type="search" id="catalog-search" placeholder="Search name / SKU / description…" />
           <select id="catalog-supplier-filter"><option value="">All suppliers</option></select>
-          <input type="search" id="catalog-search" placeholder="Search name / SKU…" />
+          <select id="catalog-category-filter"><option value="">All product types</option></select>
+          <button class="btn" id="import-catalog">⬆ Import Catalog</button>
           <button class="btn primary" id="add-item">+ Add Item</button>
         </div>
       </div>
@@ -105,6 +107,8 @@
         <button class="icon-btn" id="modal-close">✕</button></div>
       <form id="modal-form"><div id="modal-fields"></div>
         <div class="modal-foot">
+          <span id="modal-extra"></span>
+          <span class="spacer"></span>
           <button type="button" class="btn" id="modal-cancel">Cancel</button>
           <button type="submit" class="btn primary">Save</button>
         </div>

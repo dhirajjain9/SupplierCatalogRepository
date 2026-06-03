@@ -27,17 +27,36 @@ def _ensure_supplier(db: Session, supplier_id: int) -> None:
 def list_items(
     db: Session = Depends(get_db),
     supplier_id: int | None = Query(default=None),
-    search: str | None = Query(default=None, description="Filter by name/sku (substring)"),
+    category: str | None = Query(default=None, description="Filter by product type/category"),
+    search: str | None = Query(
+        default=None, description="Substring match on name, SKU or description"
+    ),
 ) -> list[models.CatalogItem]:
     stmt = select(models.CatalogItem).order_by(models.CatalogItem.name)
     if supplier_id is not None:
         stmt = stmt.where(models.CatalogItem.supplier_id == supplier_id)
+    if category:
+        stmt = stmt.where(models.CatalogItem.category == category)
     if search:
         like = f"%{search}%"
         stmt = stmt.where(
-            models.CatalogItem.name.ilike(like) | models.CatalogItem.sku.ilike(like)
+            models.CatalogItem.name.ilike(like)
+            | models.CatalogItem.sku.ilike(like)
+            | models.CatalogItem.description.ilike(like)
         )
     return list(db.scalars(stmt).all())
+
+
+@router.get("/categories", response_model=list[str])
+def list_categories(db: Session = Depends(get_db)) -> list[str]:
+    """Distinct, non-empty product-type categories — used to populate filters."""
+    stmt = (
+        select(models.CatalogItem.category)
+        .where(models.CatalogItem.category.is_not(None))
+        .distinct()
+        .order_by(models.CatalogItem.category)
+    )
+    return [c for c in db.scalars(stmt).all() if c]
 
 
 @router.post("", response_model=schemas.CatalogItemOut, status_code=status.HTTP_201_CREATED)
