@@ -1,0 +1,6 @@
+Part Name,SKU,Category,UOM,Description,RoHS,Lead Time,Datasheet
+Resistor 10kΩ 1/4W,RES-10K,Passives,reel,5% carbon film,Yes,2 weeks,res10k.pdf
+Capacitor 100nF 50V,CAP-100N,Passives,reel,X7R ceramic,Yes,3 weeks,cap100n.pdf
+ATmega328P-PU,MCU-328P,Microcontrollers,tray,"8-bit AVR, DIP-28",Yes,6 weeks,atmega328p.pdf
+LM358 Op-Amp,IC-LM358,ICs,tube,"Dual op-amp, SOIC-8",Yes,4 weeks,lm358.pdf
+Tactile Switch 6mm,SW-TACT6,Electromech,bag,SPST momentary,Yes,1 week,

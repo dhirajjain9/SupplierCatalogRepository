@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 
 # Map each canonical field to the set of lower-cased header aliases we accept.
 HEADER_ALIASES: dict[str, set[str]] = {
-    "name": {"name", "product", "product name", "item", "item name", "title"},
+    "name": {"name", "product", "product name", "part name", "item", "item name",
+             "item description", "product description", "title", "material", "model"},
     "sku": {"sku", "code", "item code", "product code", "part", "part number",
             "part no", "part no.", "mpn"},
     "unit": {"unit", "uom", "unit of measure"},

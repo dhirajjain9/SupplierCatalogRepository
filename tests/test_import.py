@@ -9,6 +9,8 @@ from backend.services import catalog_import as ci
 # --------------------------------------------------------------------------- #
 def test_header_aliases_map_to_canonical():
     assert ci.canonical_header("Product Name") == "name"
+    assert ci.canonical_header("Part Name") == "name"      # distinct from Part No.
+    assert ci.canonical_header("UOM") == "unit"
     assert ci.canonical_header("MOQ") == "min_quantity"
     assert ci.canonical_header("Part No.") == "sku"
     assert ci.canonical_header("Unknown Column") is None

@@ -47,11 +47,50 @@ function fmtSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+const ICONS = {
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  alert: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+  box: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`,
+  tag: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>`,
+  doc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,
+  image: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+};
+
 function toast(msg, isError) {
   const el = document.getElementById("toast");
-  el.textContent = msg;
-  el.className = "toast" + (isError ? " error" : "");
-  setTimeout(() => (el.className = "toast hidden"), 3000);
+  el.innerHTML = `<span class="dot">${isError ? ICONS.alert : ICONS.check}</span>${esc(msg)}`;
+  el.className = "toast" + (isError ? " error" : " success");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (el.className = "toast hidden"), 2800);
+}
+
+// Centered empty-state row for a table body.
+function emptyState(colspan, icon, title, sub) {
+  return `<tr><td colspan="${colspan}" class="empty">
+    ${icon}<div class="empty-title">${esc(title)}</div>
+    <div class="empty-sub">${esc(sub)}</div></td></tr>`;
+}
+
+// Shimmer placeholder rows shown while data loads.
+function skeletonRows(colspan, rows = 4) {
+  const cells = Array.from({ length: colspan }, () => `<td><div class="skeleton"></div></td>`).join("");
+  return Array.from({ length: rows }, () => `<tr class="skeleton-row">${cells}</tr>`).join("");
+}
+
+// Keep the segmented-nav count badges in sync with the data.
+async function refreshCounts() {
+  try {
+    const [s, c, q, d] = await Promise.all([
+      api.get("/api/suppliers"), api.get("/api/catalog-items"),
+      api.get("/api/quotes"), api.get("/api/documents"),
+    ]);
+    const set = (key, n) => {
+      const el = document.querySelector(`.count[data-count="${key}"]`);
+      if (el) el.textContent = n ? ` ${n}` : "";
+    };
+    set("suppliers", s.length); set("catalog", c.length);
+    set("quotes", q.length); set("documents", d.length);
+  } catch (_) { /* counts are best-effort */ }
 }
 
 // --------------------------------------------------------------------------- //
@@ -143,26 +182,31 @@ document.getElementById("modal-form").addEventListener("submit", async (e) => {
 // Suppliers
 // --------------------------------------------------------------------------- //
 async function loadSuppliers() {
+  const tbody = document.querySelector("#suppliers-table tbody");
   const q = document.getElementById("supplier-search").value.trim();
+  tbody.innerHTML = skeletonRows(6);
   const url = "/api/suppliers" + (q ? `?search=${encodeURIComponent(q)}` : "");
   suppliersCache = await api.get(url);
-  const tbody = document.querySelector("#suppliers-table tbody");
   if (!suppliersCache.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">No suppliers yet.</td></tr>`;
+    tbody.innerHTML = q
+      ? emptyState(6, ICONS.box, "No matches", `Nothing matches “${q}”.`)
+      : emptyState(6, ICONS.box, "No suppliers yet", "Add your first supplier to get started.");
+    refreshCounts();
     return;
   }
   tbody.innerHTML = suppliersCache
     .map(
       (s) => `<tr>
-        <td>${esc(s.name)}</td><td>${esc(s.contact_name)}</td>
-        <td>${esc(s.email)}</td><td>${esc(s.phone)}</td>
-        <td>${s.category ? `<span class="pill">${esc(s.category)}</span>` : ""}</td>
+        <td>${esc(s.name)}</td><td>${esc(s.contact_name) || "—"}</td>
+        <td>${esc(s.email) || "—"}</td><td>${esc(s.phone) || "—"}</td>
+        <td>${s.category ? `<span class="pill">${esc(s.category)}</span>` : "—"}</td>
         <td class="right">
           <button class="btn link" onclick="editSupplier(${s.id})">Edit</button>
           <button class="btn danger-text" onclick="deleteSupplier(${s.id})">Delete</button>
         </td></tr>`
     )
     .join("");
+  refreshCounts();
 }
 
 function supplierFields(s = {}) {
@@ -221,6 +265,8 @@ async function ensureItems() {
 }
 
 async function loadCatalog() {
+  const tbody = document.querySelector("#catalog-table tbody");
+  tbody.innerHTML = skeletonRows(6);
   await ensureSuppliers();
   const filter = document.getElementById("catalog-supplier-filter");
   const current = filter.value;
@@ -246,26 +292,42 @@ async function loadCatalog() {
   const url = "/api/catalog-items" + (params.toString() ? `?${params}` : "");
   itemsCache = await api.get(url);
 
-  const tbody = document.querySelector("#catalog-table tbody");
+  // One request for image thumbnails, mapped to the first photo per item.
+  const thumbs = {};
+  try {
+    (await api.get("/api/documents?kind=image")).forEach((d) => {
+      if (d.catalog_item_id && !thumbs[d.catalog_item_id]) thumbs[d.catalog_item_id] = d.id;
+    });
+  } catch (_) { /* thumbnails are optional */ }
+
   if (!itemsCache.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">No catalog items yet.</td></tr>`;
+    const filtering = q || filter.value || catFilter.value;
+    tbody.innerHTML = filtering
+      ? emptyState(6, ICONS.box, "No matching items", "Try clearing the search or filters.")
+      : emptyState(6, ICONS.box, "No catalog items yet", "Import a catalog or add an item to begin.");
+    refreshCounts();
     return;
   }
   tbody.innerHTML = itemsCache
-    .map(
-      (i) => `<tr>
-        <td>${esc(i.name)}</td><td>${esc(i.sku)}</td>
-        <td>${esc(supplierName(i.supplier_id))}</td><td>${esc(i.unit)}</td>
-        <td>${i.category ? `<span class="pill">${esc(i.category)}</span>` : ""}</td>
+    .map((i) => {
+      const thumb = thumbs[i.id]
+        ? `<img class="thumb" src="/api/documents/${thumbs[i.id]}/download" alt="" />`
+        : `<span class="thumb thumb-ph">${ICONS.image}</span>`;
+      return `<tr>
+        <td><div class="cell-with-thumb">${thumb}<span>${esc(i.name)}</span></div></td>
+        <td>${esc(i.sku) || "—"}</td>
+        <td>${esc(supplierName(i.supplier_id))}</td><td>${esc(i.unit) || "—"}</td>
+        <td>${i.category ? `<span class="pill">${esc(i.category)}</span>` : "—"}</td>
         <td class="right">
           <button class="btn link" onclick="viewImages(${i.id})">Photos</button>
           ${i.attributes && Object.keys(i.attributes).length
               ? `<button class="btn link" onclick="viewAttributes(${i.id})">Columns</button>` : ""}
           <button class="btn link" onclick="editItem(${i.id})">Edit</button>
           <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
-        </td></tr>`
-    )
+        </td></tr>`;
+    })
     .join("");
+  refreshCounts();
 }
 
 window.viewAttributes = function (id) {
@@ -454,27 +516,31 @@ async function loadQuotes() {
     itemsCache.map((i) => `<option value="${i.id}">${esc(i.name)}</option>`).join("");
   filter.value = current;
 
+  const tbody = document.querySelector("#quotes-table tbody");
+  tbody.innerHTML = skeletonRows(6);
   const url =
     "/api/quotes" + (filter.value ? `?catalog_item_id=${filter.value}` : "");
   const quotes = await api.get(url);
-  const tbody = document.querySelector("#quotes-table tbody");
   if (!quotes.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">No quotes yet.</td></tr>`;
+    tbody.innerHTML = emptyState(6, ICONS.tag, "No quotes yet",
+      "Import a quotation or add a price to a catalog item.");
+    refreshCounts();
     return;
   }
   tbody.innerHTML = quotes
     .map(
       (q) => `<tr>
         <td>${esc(itemName(q.catalog_item_id))}</td>
-        <td>${q.unit_price.toFixed(2)} ${esc(q.currency)}</td>
-        <td>${q.min_quantity}</td><td>${esc(q.valid_from)}</td>
-        <td>${esc(q.valid_until)}</td>
+        <td><span class="price">${q.unit_price.toFixed(2)}</span> ${esc(q.currency)}</td>
+        <td>${q.min_quantity}</td><td>${esc(q.valid_from) || "—"}</td>
+        <td>${esc(q.valid_until) || "—"}</td>
         <td class="right">
           <button class="btn link" onclick="editQuote(${q.id})">Edit</button>
           <button class="btn danger-text" onclick="deleteQuote(${q.id})">Delete</button>
         </td></tr>`
     )
     .join("");
+  refreshCounts();
 }
 
 function quoteFields(q = {}) {
@@ -536,27 +602,36 @@ document.getElementById("quote-item-filter").addEventListener("change", loadQuot
 // Documents
 // --------------------------------------------------------------------------- //
 async function loadDocuments() {
+  const tbody = document.querySelector("#documents-table tbody");
+  tbody.innerHTML = skeletonRows(6);
   await ensureSuppliers();
   await ensureItems();
   const docs = await api.get("/api/documents");
-  const tbody = document.querySelector("#documents-table tbody");
   if (!docs.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty">No documents yet.</td></tr>`;
+    tbody.innerHTML = emptyState(6, ICONS.doc, "No documents yet",
+      "Upload spec sheets, certificates or images.");
+    refreshCounts();
     return;
   }
   tbody.innerHTML = docs
     .map(
       (d) => `<tr>
-        <td>${esc(d.filename)}</td><td>${esc(d.content_type)}</td>
+        <td><div class="cell-with-thumb">
+          ${d.kind === "image"
+            ? `<img class="thumb" src="/api/documents/${d.id}/download" alt="" />`
+            : `<span class="thumb thumb-ph">${ICONS.doc}</span>`}
+          <span>${esc(d.filename)}</span></div></td>
+        <td>${esc(d.content_type) || "—"}</td>
         <td>${fmtSize(d.size_bytes)}</td>
-        <td>${d.supplier_id ? esc(supplierName(d.supplier_id)) : ""}</td>
-        <td>${d.catalog_item_id ? esc(itemName(d.catalog_item_id)) : ""}</td>
+        <td>${d.supplier_id ? esc(supplierName(d.supplier_id)) : "—"}</td>
+        <td>${d.catalog_item_id ? esc(itemName(d.catalog_item_id)) : "—"}</td>
         <td class="right">
           <a class="btn link" href="/api/documents/${d.id}/download">Download</a>
           <button class="btn danger-text" onclick="deleteDocument(${d.id})">Delete</button>
         </td></tr>`
     )
     .join("");
+  refreshCounts();
 }
 
 document.getElementById("add-document").addEventListener("click", async () => {
@@ -615,4 +690,15 @@ function debounce(fn, ms) {
   };
 }
 
+// Dismiss the modal with Escape or by clicking the dimmed backdrop.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !document.getElementById("modal-overlay").classList.contains("hidden")) {
+    closeModal();
+  }
+});
+document.getElementById("modal-overlay").addEventListener("click", (e) => {
+  if (e.target.id === "modal-overlay") closeModal();
+});
+
 loadSuppliers();
+refreshCounts();
