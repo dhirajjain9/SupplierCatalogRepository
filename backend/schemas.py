@@ -128,6 +128,30 @@ class ImportWarning(BaseModel):
     warning: str
 
 
+class ImportRowIn(BaseModel):
+    """A single parsed row sent from the browser (file parsed client-side)."""
+    name: str
+    sku: str | None = None
+    unit: str | None = None
+    category: str | None = None
+    description: str | None = None
+    unit_price: float | None = None
+    currency: str = "USD"
+    min_quantity: int = 1
+    source_row: int = 0
+    supplier_name: str | None = None
+    supplier_info: dict[str, str] = {}
+    attributes: dict = {}
+
+
+class RowsImport(BaseModel):
+    """Batch of parsed rows for catalog/quotation import (bypasses upload size limits)."""
+    supplier_id: int | None = None
+    supplier_name: str | None = None
+    rows: list[ImportRowIn] = []
+    warnings: list[ImportWarning] = []
+
+
 class ImportSummary(BaseModel):
     supplier_id: int | None = None      # set when the import targets one supplier
     rows_captured: int       # every non-empty row in the file is imported

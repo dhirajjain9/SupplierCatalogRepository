@@ -81,6 +81,47 @@ def test_quotation_import_auto_matches_across_suppliers(client):
     assert r["items_matched"] == 2
 
 
+def test_catalog_import_rows_json_batch(client):
+    # Browser-parsed rows posted as JSON (bypasses the upload size limit).
+    payload = {
+        "rows": [
+            {"name": "Resistor", "sku": "R1", "unit_price": 0.05, "currency": "USD",
+             "min_quantity": 1000, "supplier_name": "Acme", "attributes": {"Name": "Resistor"}},
+            {"name": "Capacitor", "sku": "C1", "supplier_name": "Acme", "attributes": {"Name": "Capacitor"}},
+        ]
+    }
+    r = client.post("/api/catalog-import/rows", json=payload).json()
+    assert r["items_created"] == 2
+    assert r["quotes_created"] == 1
+    assert r["suppliers_created"] == 1
+
+    # A second batch for the same supplier doesn't recreate it, and upserts by SKU.
+    r2 = client.post("/api/catalog-import/rows", json={
+        "rows": [{"name": "Resistor v2", "sku": "R1", "supplier_name": "Acme", "attributes": {}}]
+    }).json()
+    assert r2["items_updated"] == 1
+    assert r2["suppliers_created"] == 0
+    assert len(client.get("/api/suppliers").json()) == 1
+
+
+def test_quotation_import_rows_json(client):
+    client.post("/api/catalog-import/rows", json={
+        "rows": [{"name": "Bolt", "sku": "B-1", "supplier_name": "Acme", "attributes": {}}]
+    })
+    r = client.post("/api/quotation-import/rows", json={
+        "rows": [{"name": "Bolt", "sku": "B-1", "unit_price": 0.10, "min_quantity": 500}]
+    }).json()
+    assert r["quotes_created"] == 1
+    assert r["items_matched"] == 1
+
+
+def test_catalog_import_rows_requires_supplier(client):
+    r = client.post("/api/catalog-import/rows", json={
+        "rows": [{"name": "Orphan", "sku": "O1", "attributes": {}}]
+    })
+    assert r.status_code == 400
+
+
 def test_images_import_without_supplier_matches_globally(client):
     import io, zipfile
     from PIL import Image

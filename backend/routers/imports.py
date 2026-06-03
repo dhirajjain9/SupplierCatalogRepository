@@ -107,14 +107,17 @@ def _parse_or_400(file: UploadFile, data: bytes) -> catalog_import.ImportResult:
 # --------------------------------------------------------------------------- #
 # Core import routines (shared by both endpoint styles)
 # --------------------------------------------------------------------------- #
-def _run_catalog_import(
-    db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None,
-    suppliers_pre_created: int = 0,
-) -> schemas.ImportSummary:
-    result = _parse_or_400(file, data)
-    resolver = _SupplierResolver(db, default_supplier)
+def _persist_catalog(
+    db: Session, rows: list[catalog_import.ParsedRow], warnings: list[dict],
+    default_supplier: models.Supplier | None, suppliers_pre_created: int = 0,
+) -> tuple[schemas.ImportSummary, dict[int, models.CatalogItem]]:
+    """Upsert parsed rows into items/quotes. Does NOT commit (caller commits).
 
-    has_file_supplier = any(r.supplier_name for r in result.rows)
+    Returns the summary and a {source_row: item} map (used to attach embedded
+    images on the file-upload path).
+    """
+    resolver = _SupplierResolver(db, default_supplier)
+    has_file_supplier = any(r.supplier_name for r in rows)
     if default_supplier is None and not has_file_supplier:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -123,10 +126,10 @@ def _run_catalog_import(
         )
 
     items_created = items_updated = quotes_created = 0
-    warnings = list(result.warnings)
+    warnings = list(warnings)
     row_to_item: dict[int, models.CatalogItem] = {}
 
-    for row in result.rows:
+    for row in rows:
         supplier = resolver.resolve(row.supplier_name, row.supplier_info)
         if supplier is None:
             warnings.append({"row": row.source_row, "warning": "No supplier for this row; skipped"})
@@ -160,7 +163,41 @@ def _run_catalog_import(
             ))
             quotes_created += 1
 
-    images_attached = 0
+    summary = schemas.ImportSummary(
+        supplier_id=default_supplier.id if default_supplier else None,
+        rows_captured=len(rows),
+        items_created=items_created,
+        items_updated=items_updated,
+        quotes_created=quotes_created,
+        suppliers_created=resolver.created + suppliers_pre_created,
+        images_attached=0,
+        rows_with_warnings=len(warnings),
+        warnings=[schemas.ImportWarning(**w) for w in warnings],
+    )
+    return summary, row_to_item
+
+
+def _rows_to_parsed(rows: list[schemas.ImportRowIn]) -> list[catalog_import.ParsedRow]:
+    return [
+        catalog_import.ParsedRow(
+            name=r.name, sku=r.sku, unit=r.unit, category=r.category,
+            description=r.description, unit_price=r.unit_price, currency=r.currency,
+            min_quantity=r.min_quantity, source_row=r.source_row,
+            supplier_name=r.supplier_name, supplier_info=dict(r.supplier_info or {}),
+            attributes=dict(r.attributes or {}),
+        )
+        for r in rows
+    ]
+
+
+def _run_catalog_import(
+    db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None,
+    suppliers_pre_created: int = 0,
+) -> schemas.ImportSummary:
+    result = _parse_or_400(file, data)
+    summary, row_to_item = _persist_catalog(
+        db, result.rows, result.warnings, default_supplier, suppliers_pre_created
+    )
     if (file.filename or "").lower().endswith(".xlsx"):
         for img in images.extract_xlsx_images(data):
             item = row_to_item.get(img.source_row or -1)
@@ -170,31 +207,21 @@ def _run_catalog_import(
                 img.data, img.filename, img.content_type,
                 supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
             ))
-            images_attached += 1
-
+            summary.images_attached += 1
     db.commit()
-    return schemas.ImportSummary(
-        supplier_id=default_supplier.id if default_supplier else None,
-        rows_captured=len(result.rows),
-        items_created=items_created,
-        items_updated=items_updated,
-        quotes_created=quotes_created,
-        suppliers_created=resolver.created + suppliers_pre_created,
-        images_attached=images_attached,
-        rows_with_warnings=len(warnings),
-        warnings=[schemas.ImportWarning(**w) for w in warnings],
-    )
+    return summary
 
 
-def _run_quotation_import(
-    db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None
+def _persist_quotation(
+    db: Session, rows: list[catalog_import.ParsedRow], warnings: list[dict],
+    default_supplier: models.Supplier | None,
 ) -> schemas.QuotationSummary:
-    result = _parse_or_400(file, data)
+    """Attach quotes to existing items by SKU. Does NOT commit (caller commits)."""
     quotes_created = rows_unmatched = rows_without_price = 0
     matched_items: set[int] = set()
-    warnings = list(result.warnings)
+    warnings = list(warnings)
 
-    for row in result.rows:
+    for row in rows:
         if not row.sku:
             rows_unmatched += 1
             warnings.append({"row": row.source_row, "warning": "No SKU; cannot match to catalog"})
@@ -220,7 +247,6 @@ def _run_quotation_import(
         quotes_created += 1
         matched_items.add(item.id)
 
-    db.commit()
     return schemas.QuotationSummary(
         supplier_id=default_supplier.id if default_supplier else None,
         quotes_created=quotes_created,
@@ -229,6 +255,15 @@ def _run_quotation_import(
         rows_without_price=rows_without_price,
         warnings=[schemas.ImportWarning(**w) for w in warnings],
     )
+
+
+def _run_quotation_import(
+    db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None
+) -> schemas.QuotationSummary:
+    result = _parse_or_400(file, data)
+    summary = _persist_quotation(db, result.rows, result.warnings, default_supplier)
+    db.commit()
+    return summary
 
 
 def _run_images_import(
@@ -307,6 +342,29 @@ def download_template() -> PlainTextResponse:
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="catalog-template.csv"'},
     )
+
+
+@router.post("/catalog-import/rows", response_model=schemas.ImportSummary)
+def import_catalog_rows(
+    payload: schemas.RowsImport, db: Session = Depends(get_db),
+) -> schemas.ImportSummary:
+    """Persist a batch of rows parsed in the browser (no file upload size limit)."""
+    default, created = _form_default_supplier(db, payload.supplier_id, payload.supplier_name)
+    warnings = [w.model_dump() for w in payload.warnings]
+    summary, _ = _persist_catalog(db, _rows_to_parsed(payload.rows), warnings, default, created)
+    db.commit()
+    return summary
+
+
+@router.post("/quotation-import/rows", response_model=schemas.QuotationSummary)
+def import_quotation_rows(
+    payload: schemas.RowsImport, db: Session = Depends(get_db),
+) -> schemas.QuotationSummary:
+    default, _ = _form_default_supplier(db, payload.supplier_id, payload.supplier_name)
+    warnings = [w.model_dump() for w in payload.warnings]
+    summary = _persist_quotation(db, _rows_to_parsed(payload.rows), warnings, default)
+    db.commit()
+    return summary
 
 
 @router.post("/catalog-import", response_model=schemas.ImportSummary)

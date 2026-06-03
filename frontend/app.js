@@ -405,8 +405,275 @@ document.getElementById("catalog-category-filter").addEventListener("change", lo
 document.getElementById("catalog-search").addEventListener("input", debounce(loadCatalog, 250));
 
 // --------------------------------------------------------------------------- //
+// Client-side file parsing — files are parsed in the browser and the extracted
+// rows are sent to the server in small batches, so large files (25 MB+) never
+// hit the serverless upload size limit.
+// --------------------------------------------------------------------------- //
+const HEADER_ALIASES = {
+  name: ["name","product","product name","part name","item","item name","item description","product description","title","material","model"],
+  sku: ["sku","code","item code","product code","part","part number","part no","part no.","mpn"],
+  unit: ["unit","uom","unit of measure"],
+  category: ["category","type","product type","group","class"],
+  description: ["description","desc","details","notes"],
+  unit_price: ["unit price","price","cost","rate","unit cost","list price"],
+  currency: ["currency","ccy","cur"],
+  min_quantity: ["min quantity","min qty","moq","minimum quantity","minimum order quantity","min order qty"],
+};
+const ALIAS_TO_FIELD = {};
+Object.entries(HEADER_ALIASES).forEach(([f, al]) => al.forEach((a) => (ALIAS_TO_FIELD[a] = f)));
+const canonicalHeader = (h) => (h == null ? null : ALIAS_TO_FIELD[String(h).trim().toLowerCase()] || null);
+const SUPPLIER_ALIASES = {
+  name: ["supplier","supplier name","vendor","vendor name","manufacturer","brand","company","seller","supplier/vendor"],
+  email: ["supplier email","vendor email","supplier e-mail"],
+  phone: ["supplier phone","vendor phone","supplier contact number","supplier mobile"],
+  contact_name: ["supplier contact","contact person","sales contact","contact name"],
+  category: ["supplier category","supplier type"], address: ["supplier address","vendor address"],
+};
+const SUPPLIER_ALIAS_TO_FIELD = {};
+Object.entries(SUPPLIER_ALIASES).forEach(([f, al]) => al.forEach((a) => (SUPPLIER_ALIAS_TO_FIELD[a] = f)));
+const supplierHeader = (h) => (h == null ? null : SUPPLIER_ALIAS_TO_FIELD[String(h).trim().toLowerCase()] || null);
+const SUPPLIER_FIELDS = ["email","phone","contact_name","category","address"];
+const cleanCell = (v) => { if (v == null) return null; const s = String(v).trim(); return s || null; };
+
+function labelHeaders(headers) {
+  const labels = [], seen = {};
+  headers.forEach((h, idx) => {
+    let base = cleanCell(h) || "Column " + (idx + 1);
+    if (seen[base]) { seen[base]++; base = base + " (" + seen[base] + ")"; } else seen[base] = 1;
+    labels.push(base);
+  });
+  return labels;
+}
+
+function normalizeRows(headers, rawRows) {
+  const result = { rows: [], warnings: [] };
+  const labels = labelHeaders(headers);
+  const colMap = {}, used = new Set();
+  headers.forEach((h, idx) => { const c = canonicalHeader(h); if (c && !used.has(c)) { colMap[idx] = c; used.add(c); } });
+  const supMap = {}, supUsed = new Set();
+  headers.forEach((h, idx) => { const c = supplierHeader(h); if (c && !supUsed.has(c)) { supMap[idx] = c; supUsed.add(c); } });
+  rawRows.forEach((raw, offset) => {
+    const rowNo = offset + 2;
+    const attributes = {};
+    labels.forEach((label, idx) => { const cell = idx < raw.length ? cleanCell(raw[idx]) : null; if (cell != null) attributes[label] = cell; });
+    for (let idx = labels.length; idx < raw.length; idx++) { const cell = cleanCell(raw[idx]); if (cell != null) attributes["Column " + (idx + 1)] = cell; }
+    if (!Object.keys(attributes).length) return;
+    const values = {};
+    Object.entries(colMap).forEach(([idx, f]) => { idx = +idx; values[f] = idx < raw.length ? cleanCell(raw[idx]) : null; });
+    let name = values.name;
+    if (!name) { name = values.sku || Object.values(attributes)[0]; if (used.has("name")) result.warnings.push({ row: rowNo, warning: `Missing name; using "${name}"` }); }
+    const row = { name, sku: values.sku || null, unit: values.unit || null, category: values.category || null,
+      description: values.description || null, unit_price: null, currency: "USD", min_quantity: 1,
+      source_row: rowNo, attributes, supplier_name: null, supplier_info: {} };
+    Object.entries(supMap).forEach(([idx, f]) => { const val = +idx < raw.length ? cleanCell(raw[+idx]) : null; if (!val) return; if (f === "name") row.supplier_name = val; else row.supplier_info[f] = val; });
+    if (values.unit_price != null) {
+      const cleaned = values.unit_price.replace(/,/g, "").replace(/^[$€£\s]+/, "").trim();
+      const price = parseFloat(cleaned);
+      if (!isNaN(price) && price >= 0) row.unit_price = price;
+      else result.warnings.push({ row: rowNo, warning: `Unparseable unit_price "${values.unit_price}"; stored in attributes only` });
+    }
+    if (values.currency) { const c = values.currency; if (c.length === 3 && /^[a-z]+$/i.test(c)) row.currency = c.toUpperCase();
+      else result.warnings.push({ row: rowNo, warning: `Invalid currency "${c}"; defaulting to USD` }); }
+    if (values.min_quantity != null) { const qn = parseInt(parseFloat(values.min_quantity), 10);
+      if (!isNaN(qn) && qn >= 1) row.min_quantity = qn; else result.warnings.push({ row: rowNo, warning: `Invalid min_quantity "${values.min_quantity}"; defaulting to 1` }); }
+    result.rows.push(row);
+  });
+  return result;
+}
+
+function parseCSV(text) {
+  text = text.replace(/^﻿/, "");
+  const rows = []; let row = [], field = "", q = false, i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+    else { if (c === '"') q = true; else if (c === ",") { row.push(field); field = ""; } else if (c === "\r") {} else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; } else field += c; }
+    i++;
+  }
+  if (field !== "" || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+const colToIdx = (ref) => { const m = /^([A-Z]+)/.exec(ref); if (!m) return 0; let n = 0; for (const ch of m[1]) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+const rowOf = (ref) => parseInt(/(\d+)$/.exec(ref)[1], 10);
+
+async function unzip(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= 0; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; } }
+  if (eocd < 0) throw new Error("Not a valid zip file");
+  const count = dv.getUint16(eocd + 10, true); let off = dv.getUint32(eocd + 16, true);
+  const entries = [];
+  for (let n = 0; n < count; n++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) break;
+    const method = dv.getUint16(off + 10, true), compSize = dv.getUint32(off + 20, true);
+    const nameLen = dv.getUint16(off + 28, true), extraLen = dv.getUint16(off + 30, true), commentLen = dv.getUint16(off + 32, true);
+    const localOff = dv.getUint32(off + 42, true);
+    const name = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nameLen));
+    entries.push({ name, method, compSize, localOff });
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  const out = {};
+  for (const e of entries) {
+    if (e.name.endsWith("/")) continue;
+    const lnameLen = dv.getUint16(e.localOff + 26, true), lextraLen = dv.getUint16(e.localOff + 28, true);
+    const dataStart = e.localOff + 30 + lnameLen + lextraLen;
+    const comp = u8.subarray(dataStart, dataStart + e.compSize);
+    let bytes;
+    if (e.method === 0) bytes = comp.slice();
+    else if (e.method === 8) { const ds = new DecompressionStream("deflate-raw"); const ab = await new Response(new Blob([comp]).stream().pipeThrough(ds)).arrayBuffer(); bytes = new Uint8Array(ab); }
+    else continue;
+    out[e.name] = bytes;
+  }
+  return out;
+}
+
+async function parseXLSX(buf) {
+  const z = await unzip(buf), dec = new TextDecoder();
+  const xml = (name) => z[name] ? new DOMParser().parseFromString(dec.decode(z[name]), "application/xml") : null;
+  const shared = []; const ss = xml("xl/sharedStrings.xml");
+  if (ss) ss.querySelectorAll("si").forEach((si) => shared.push(Array.from(si.querySelectorAll("t")).map((t) => t.textContent).join("")));
+  let sheetPath = "xl/worksheets/sheet1.xml";
+  const wb = xml("xl/workbook.xml"), wbRels = xml("xl/_rels/workbook.xml.rels");
+  if (wb && wbRels) { const first = wb.querySelector("sheets > sheet"); const rid = first && first.getAttribute("r:id");
+    if (rid) { const rel = Array.from(wbRels.querySelectorAll("Relationship")).find((r) => r.getAttribute("Id") === rid); if (rel) sheetPath = "xl/" + rel.getAttribute("Target").replace(/^\/?xl\//, ""); } }
+  if (!z[sheetPath]) { const k = Object.keys(z).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort(); if (k.length) sheetPath = k[0]; }
+  const sheet = xml(sheetPath); let maxRow = 0; const cellMap = {};
+  if (sheet) sheet.querySelectorAll("sheetData > row").forEach((r) => {
+    r.querySelectorAll("c").forEach((c) => {
+      const ref = c.getAttribute("r"); if (!ref) return;
+      const rn = rowOf(ref), ci = colToIdx(ref); maxRow = Math.max(maxRow, rn);
+      const t = c.getAttribute("t"); let v = "";
+      if (t === "s") { const vEl = c.querySelector("v"); if (vEl) v = shared[+vEl.textContent] || ""; }
+      else if (t === "inlineStr") { const tEl = c.querySelector("is t"); if (tEl) v = tEl.textContent; }
+      else { const vEl = c.querySelector("v"); if (vEl) v = vEl.textContent; }
+      (cellMap[rn] = cellMap[rn] || {})[ci] = v;
+    });
+  });
+  const grid = [];
+  for (let rn = 1; rn <= maxRow; rn++) { const cm = cellMap[rn] || {}; const maxc = Math.max(-1, ...Object.keys(cm).map(Number)); const arr = []; for (let c = 0; c <= maxc; c++) arr.push(cm[c] !== undefined ? cm[c] : ""); grid.push(arr); }
+  const headers = grid[0] || [], rows = grid.slice(1);
+  const images = []; const ctMap = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
+  for (const dname of Object.keys(z).filter((n) => /^xl\/drawings\/drawing\d+\.xml$/.test(n))) {
+    const dxml = xml(dname); const drels = xml("xl/drawings/_rels/" + dname.split("/").pop() + ".rels"); const relTarget = {};
+    if (drels) drels.querySelectorAll("Relationship").forEach((r) => (relTarget[r.getAttribute("Id")] = r.getAttribute("Target")));
+    dxml && dxml.querySelectorAll("*").forEach((node) => {
+      if (node.localName !== "oneCellAnchor" && node.localName !== "twoCellAnchor") return;
+      const fromRow = node.querySelector("from row"); if (!fromRow) return;
+      const rn = parseInt(fromRow.textContent, 10) + 1;
+      const blip = node.querySelector("blip"); if (!blip) return;
+      const embed = blip.getAttribute("r:embed") || blip.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
+      let target = relTarget[embed]; if (!target) return;
+      const path = ("xl/drawings/" + target).replace(/xl\/drawings\/\.\.\//, "xl/");
+      const bytes = z[path]; if (!bytes) return;
+      const ext = path.split(".").pop().toLowerCase();
+      images.push({ row: rn, bytes, type: ctMap[ext] || "image/png" });
+    });
+  }
+  return { headers, rows, images };
+}
+
+let _pdfReady = null;
+function ensurePdfJs() {
+  if (window.pdfjsLib) return Promise.resolve();
+  if (_pdfReady) return _pdfReady;
+  _pdfReady = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; res(); };
+    s.onerror = () => rej(new Error("Could not load the PDF library (internet needed for PDF import)."));
+    document.head.appendChild(s);
+  });
+  return _pdfReady;
+}
+async function parsePDF(buf) {
+  await ensurePdfJs();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const lines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p); const tc = await page.getTextContent(); const byY = {};
+    tc.items.forEach((it) => { const str = (it.str || "").trim(); if (!str) return; const x = it.transform[4], y = Math.round(it.transform[5]); const key = p + ":" + y; (byY[key] = byY[key] || { y, page: p, tokens: [] }).tokens.push({ x, w: it.width || 0, str }); });
+    Object.values(byY).forEach((l) => lines.push(l));
+  }
+  lines.sort((a, b) => a.page - b.page || b.y - a.y);
+  const toCells = (line) => { line.tokens.sort((a, b) => a.x - b.x); const cells = []; let cur = null; for (const t of line.tokens) { if (cur && t.x - (cur.x + cur.w) < 18) { cur.str += " " + t.str; cur.w = t.x + t.w - cur.x; } else { cur = { x: t.x, w: t.w, str: t.str }; cells.push(cur); } } return cells; };
+  const rowsCells = lines.map(toCells);
+  let hi = rowsCells.findIndex((cells) => cells.some((c) => canonicalHeader(c.str) === "name"));
+  if (hi < 0) return { headers: [], rows: [], images: [] };
+  const headerCells = rowsCells[hi]; const anchors = headerCells.map((c) => c.x + c.w / 2);
+  const headers = headerCells.map((c) => c.str); const rows = [];
+  for (let i = hi + 1; i < rowsCells.length; i++) { const cells = rowsCells[i]; if (!cells.length) continue; const arr = new Array(anchors.length).fill(""); cells.forEach((c) => { const cx = c.x + c.w / 2; let best = 0, bd = 1e9; anchors.forEach((a, k) => { const d = Math.abs(a - cx); if (d < bd) { bd = d; best = k; } }); arr[best] = arr[best] ? arr[best] + " " + c.str : c.str; }); rows.push(arr); }
+  return { headers, rows, images: [] };
+}
+
+function readFileAs(file, as) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); if (as === "text") r.readAsText(file); else r.readAsArrayBuffer(file); });
+}
+async function parseCatalogFile(file) {
+  const name = (file.name || "").toLowerCase();
+  if (name.endsWith(".csv")) { const rows = parseCSV(await readFileAs(file, "text")); const r = normalizeRows(rows[0] || [], rows.slice(1)); r.images = []; return r; }
+  if (name.endsWith(".xlsx")) { const { headers, rows, images } = await parseXLSX(await readFileAs(file, "buf")); const r = normalizeRows(headers, rows); r.images = images; return r; }
+  if (name.endsWith(".pdf")) { const { headers, rows } = await parsePDF(await readFileAs(file, "buf")); const r = normalizeRows(headers, rows); r.images = []; return r; }
+  throw new Error("Unsupported file type. Please upload a .csv, .xlsx or .pdf file.");
+}
+
+const IMAGE_EXTS = [".jpg",".jpeg",".png",".gif",".webp",".bmp"];
+const isImageName = (n) => IMAGE_EXTS.includes((n.match(/\.[^.]+$/) || [""])[0].toLowerCase());
+const ctForName = (n) => ({ ".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",".gif":"image/gif",".webp":"image/webp",".bmp":"image/bmp" }[(n.match(/\.[^.]+$/) || [""])[0].toLowerCase()] || "application/octet-stream");
+
+// --------------------------------------------------------------------------- //
 // Imports: catalog (CSV/XLSX/PDF), quotation (Step 2) and product images
 // --------------------------------------------------------------------------- //
+const ROW_BATCH = 400;  // rows per request — keeps each payload well under the limit
+const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+function mergeSummary(a, b) {
+  if (!a) return { ...b, warnings: (b.warnings || []).slice() };
+  const out = { ...a };
+  ["rows_captured","items_created","items_updated","quotes_created","suppliers_created",
+   "images_attached","rows_with_warnings","items_matched","rows_unmatched","rows_without_price",
+   "images_stored"].forEach((k) => { if (typeof b[k] === "number") out[k] = (a[k] || 0) + b[k]; });
+  out.warnings = (a.warnings || []).concat(b.warnings || []);
+  return out;
+}
+
+async function postRows(action, supplier, rows, warnings) {
+  const body = { rows, warnings: warnings || [] };
+  if (supplier.id) body.supplier_id = +supplier.id;
+  if (supplier.name) body.supplier_name = supplier.name;
+  const res = await fetch(`/api/${action}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Import failed");
+  return data;
+}
+
+// Import all parsed rows in batches; returns the merged summary.
+async function importRowsBatched(action, supplier, parsed) {
+  if (!parsed.rows.length) {
+    throw new Error("No rows found in the file. For PDFs, it must contain a text-based "
+      + "table (not a scanned image); otherwise try CSV or Excel.");
+  }
+  let agg = null;
+  const batches = chunk(parsed.rows, ROW_BATCH);
+  for (let bi = 0; bi < batches.length; bi++) {
+    const part = await postRows(action, supplier, batches[bi], bi === 0 ? parsed.warnings : []);
+    agg = mergeSummary(agg, part);
+  }
+  return agg;
+}
+
+// Upload one image (built from raw bytes) — each request stays under the limit.
+async function uploadOneImage(filename, bytes, type, supplierId) {
+  const fd = new FormData();
+  fd.append("file", new File([bytes], filename, { type }));
+  if (supplierId) fd.append("supplier_id", supplierId);
+  const res = await fetch("/api/images-import", { method: "POST", body: fd });
+  if (!res.ok) return { images_stored: 0, images_unmatched: [filename], files_skipped: [] };
+  return res.json();
+}
+
 function warningList(warnings) {
   if (!warnings || !warnings.length) return "";
   const items = warnings.slice(0, 20).map((w) => `<li>Row ${w.row}: ${esc(w.warning)}</li>`).join("");
@@ -414,54 +681,106 @@ function warningList(warnings) {
   return `<ul class="errs">${items}${more}</ul>`;
 }
 
-// Generic upload modal. Supplier is OPTIONAL: it can come from a "Supplier"
-// column in the file, or be chosen/typed here — adding a supplier first is not
-// required. `supplierMode`: "name" shows existing-picker + new-name field
-// (catalog/quotation); "scope" shows only an optional existing-picker (images).
-function openUploadModal({ title, action, accept, fileLabel, renderSummary, extraFooter, supplierMode }) {
+// Generic upload modal. The file is parsed in the browser and sent as small
+// batches (or per-image), so file size never hits the upload limit. Supplier is
+// OPTIONAL (a "Supplier" column, or chosen/typed here). `kind`: catalog | quotation
+// | images. `supplierMode`: "name" shows picker + new-name field; "scope" picker only.
+function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraFooter, supplierMode }) {
   const fields = [
     { name: "supplier_id", label: "Supplier (optional)", type: "select",
       options: [{ value: "", label: "— Auto-detect from file —" }]
         .concat(suppliersCache.map((s) => ({ value: s.id, label: s.name }))) },
   ];
-  if (supplierMode === "name") {
-    fields.push({ name: "supplier_name", label: "…or new supplier name (optional)" });
-  }
+  if (supplierMode === "name") fields.push({ name: "supplier_name", label: "…or new supplier name (optional)" });
   fields.push({ name: "file", label: fileLabel, type: "file", required: true, accept });
 
-  openModal(
-    title,
-    fields,
-    async (v, form) => {
-      const fileInput = form.querySelector('input[name="file"]');
-      if (!fileInput.files.length) throw new Error("Please choose a file");
-      const fd = new FormData();
-      fd.append("file", fileInput.files[0]);
-      if (v.supplier_id) fd.append("supplier_id", v.supplier_id);
-      if (v.supplier_name && v.supplier_name.trim()) fd.append("supplier_name", v.supplier_name.trim());
-      const res = await fetch(`/api/${action}`, { method: "POST", body: fd });
-      const summary = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(summary.detail || "Import failed");
-      document.getElementById("modal-title").textContent = "Import Complete";
-      document.getElementById("modal-extra").innerHTML = "";
-      document.getElementById("modal-fields").innerHTML = renderSummary(summary);
-      onSubmit = async () => {};  // next "Save" just closes
-      loadCatalog();
-      refreshCounts();
-      return false;               // keep modal open to show the summary
-    },
-    extraFooter || ""
-  );
+  openModal(title, fields, async (v, form) => {
+    const fileInput = form.querySelector('input[name="file"]');
+    if (!fileInput.files.length) throw new Error("Please choose a file");
+    const file = fileInput.files[0];
+    const supplier = { id: v.supplier_id || null, name: (v.supplier_name || "").trim() || null };
+
+    showModalBusy("Parsing file…");
+    let summary;
+    if (kind === "images") {
+      summary = await runImageImport(file, supplier.id);
+    } else {
+      const parsed = await parseCatalogFile(file);
+      const action = kind === "catalog" ? "catalog-import/rows" : "quotation-import/rows";
+      summary = await importRowsBatched(action, supplier, parsed);
+      if (kind === "catalog" && parsed.images && parsed.images.length) {
+        summary.images_attached = (summary.images_attached || 0)
+          + await attachEmbeddedImages(parsed, supplier.id);
+      }
+    }
+
+    document.getElementById("modal-title").textContent = "Import Complete";
+    document.getElementById("modal-extra").innerHTML = "";
+    document.getElementById("modal-fields").innerHTML = renderSummary(summary);
+    onSubmit = async () => {};
+    loadCatalog();
+    refreshCounts();
+    return false;
+  }, extraFooter || "");
+}
+
+// Show a lightweight "working" state inside the modal during a long import.
+function showModalBusy(msg) {
+  document.getElementById("modal-fields").innerHTML =
+    `<p class="muted">${esc(msg)} This can take a moment for large files.</p>`;
+  document.getElementById("modal-extra").innerHTML = "";
+}
+
+// Upload .xlsx-embedded images one at a time, named by their row's SKU.
+async function attachEmbeddedImages(parsed, supplierId) {
+  const skuByRow = {};
+  parsed.rows.forEach((r) => { if (r.sku) skuByRow[r.source_row] = r.sku; });
+  let attached = 0;
+  for (const img of parsed.images) {
+    const sku = skuByRow[img.row];
+    if (!sku) continue;
+    const ext = (img.type.split("/")[1] || "png");
+    const res = await uploadOneImage(`${sku}.${ext}`, img.bytes, img.type, supplierId);
+    attached += res.images_stored || 0;
+  }
+  return attached;
+}
+
+// Image import: unzip in the browser (if a zip) and upload each image separately.
+async function runImageImport(file, supplierId) {
+  const name = (file.name || "").toLowerCase();
+  let entries = [], skipped = [];
+  if (name.endsWith(".zip")) {
+    const z = await unzip(await readFileAs(file, "buf"));
+    for (const [fn, bytes] of Object.entries(z)) {
+      const base = fn.split("/").pop();
+      if (!base || base.startsWith(".")) continue;
+      if (isImageName(fn)) entries.push({ filename: base, bytes, type: ctForName(fn) });
+      else skipped.push(base);
+    }
+  } else if (isImageName(name)) {
+    entries.push({ filename: file.name, bytes: new Uint8Array(await readFileAs(file, "buf")), type: file.type || ctForName(name) });
+  } else {
+    throw new Error("Upload a .zip of images or a single image file (.jpg/.png/…).");
+  }
+  let stored = 0; const unmatched = [];
+  for (const e of entries) {
+    showModalBusy(`Uploading images… (${stored + unmatched.length + 1}/${entries.length})`);
+    const res = await uploadOneImage(e.filename, e.bytes, e.type, supplierId);
+    stored += res.images_stored || 0;
+    (res.images_unmatched || []).forEach((u) => unmatched.push(u));
+  }
+  return { images_stored: stored, images_unmatched: unmatched, files_skipped: skipped };
 }
 
 document.getElementById("import-catalog").addEventListener("click", async () => {
   await ensureSuppliers();
   openUploadModal({
     title: "Import Catalog",
-    action: "catalog-import",
+    kind: "catalog",
     supplierMode: "name",
     accept: ".csv,.xlsx,.pdf",
-    fileLabel: "Catalog file (.csv, .xlsx, .pdf)",
+    fileLabel: "Catalog file (.csv, .xlsx, .pdf) — any size",
     extraFooter: `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`,
     renderSummary: (s) => `
       <p><strong>${s.rows_captured}</strong> row(s) captured —
@@ -481,10 +800,10 @@ document.getElementById("import-quotation").addEventListener("click", async () =
   await ensureSuppliers();
   openUploadModal({
     title: "Import Quotation (Step 2)",
-    action: "quotation-import",
+    kind: "quotation",
     supplierMode: "name",
     accept: ".csv,.xlsx,.pdf",
-    fileLabel: "Quotation file with SKU + price + MOQ",
+    fileLabel: "Quotation file with SKU + price + MOQ — any size",
     renderSummary: (s) => `
       <p><strong>${s.quotes_created}</strong> quote(s) recorded across
          <strong>${s.items_matched}</strong> catalog item(s).</p>
@@ -500,7 +819,7 @@ document.getElementById("import-images").addEventListener("click", async () => {
   await ensureSuppliers();
   openUploadModal({
     title: "Import Product Images",
-    action: "images-import",
+    kind: "images",
     supplierMode: "scope",
     accept: ".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
     fileLabel: "A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
