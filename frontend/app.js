@@ -265,9 +265,50 @@ async function ensureItems() {
   if (!itemsCache.length) itemsCache = await api.get("/api/catalog-items");
 }
 
+let catalogView = localStorage.getItem("catalogView") || "gallery";
+
+function imgUrl(docId) { return `/api/documents/${docId}/download`; }
+
+// A product card for the gallery view.
+function catalogCard(i, thumbDocId) {
+  const a = i.attributes || {};
+  const spec = a.Material || a.Features || a.Specification || "";
+  const img = thumbDocId
+    ? `<img src="${imgUrl(thumbDocId)}" alt="" loading="lazy" />`
+    : `<div class="ph">${ICONS.image}</div>`;
+  return `<div class="pcard">
+    <div class="pcard-img" onclick="viewImages(${i.id})">${img}</div>
+    <div class="pcard-body">
+      <div class="pcard-name" title="${esc(i.name)}">${esc(i.name)}</div>
+      <div class="pcard-sub">${i.category ? `<span class="pill">${esc(i.category)}</span>` : ""}
+        <span class="muted">${esc(supplierName(i.supplier_id))}</span></div>
+      ${spec ? `<div class="pcard-spec">${esc(spec)}</div>` : ""}
+    </div>
+    <div class="pcard-foot">
+      ${i.attributes && Object.keys(i.attributes).length
+          ? `<button class="btn link" onclick="viewAttributes(${i.id})">Details</button>` : ""}
+      <button class="btn link" onclick="editItem(${i.id})">Edit</button>
+      <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
+    </div>
+  </div>`;
+}
+
+function setCatalogView(view) {
+  catalogView = view;
+  localStorage.setItem("catalogView", view);
+  document.querySelectorAll("#catalog-view-toggle button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === view));
+  document.getElementById("catalog-gallery").classList.toggle("hidden", view !== "gallery");
+  document.getElementById("catalog-table-wrap").classList.toggle("hidden", view !== "table");
+}
+
 async function loadCatalog() {
+  const gallery = document.getElementById("catalog-gallery");
   const tbody = document.querySelector("#catalog-table tbody");
-  tbody.innerHTML = skeletonRows(6);
+  setCatalogView(catalogView);
+  if (catalogView === "gallery") gallery.innerHTML = `<p class="muted" style="padding:8px">Loading…</p>`;
+  else tbody.innerHTML = skeletonRows(6);
+
   await ensureSuppliers();
   const filter = document.getElementById("catalog-supplier-filter");
   const current = filter.value;
@@ -276,7 +317,6 @@ async function loadCatalog() {
     suppliersCache.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
   filter.value = current;
 
-  // Populate the product-type (category) filter from distinct categories.
   const catFilter = document.getElementById("catalog-category-filter");
   const currentCat = catFilter.value;
   const categories = await api.get("/api/catalog-items/categories");
@@ -303,16 +343,20 @@ async function loadCatalog() {
 
   if (!itemsCache.length) {
     const filtering = q || filter.value || catFilter.value;
-    tbody.innerHTML = filtering
-      ? emptyState(6, ICONS.box, "No matching items", "Try clearing the search or filters.")
-      : emptyState(6, ICONS.box, "No catalog items yet", "Import a catalog or add an item to begin.");
+    const title = filtering ? "No matching items" : "No catalog items yet";
+    const sub = filtering ? "Try clearing the search or filters." : "Import a catalog or add an item to begin.";
+    gallery.innerHTML = `<div class="gallery-empty">${ICONS.box}<div class="empty-title">${title}</div><div class="empty-sub">${sub}</div></div>`;
+    tbody.innerHTML = emptyState(6, ICONS.box, title, sub);
     refreshCounts();
     return;
   }
-  tbody.innerHTML = itemsCache
-    .map((i) => {
+
+  if (catalogView === "gallery") {
+    gallery.innerHTML = itemsCache.map((i) => catalogCard(i, thumbs[i.id])).join("");
+  } else {
+    tbody.innerHTML = itemsCache.map((i) => {
       const thumb = thumbs[i.id]
-        ? `<img class="thumb" src="/api/documents/${thumbs[i.id]}/download" alt="" />`
+        ? `<img class="thumb" src="${imgUrl(thumbs[i.id])}" alt="" />`
         : `<span class="thumb thumb-ph">${ICONS.image}</span>`;
       return `<tr>
         <td><div class="cell-with-thumb">${thumb}<span>${esc(i.name)}</span></div></td>
@@ -326,10 +370,13 @@ async function loadCatalog() {
           <button class="btn link" onclick="editItem(${i.id})">Edit</button>
           <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
         </td></tr>`;
-    })
-    .join("");
+    }).join("");
+  }
   refreshCounts();
 }
+
+document.querySelectorAll("#catalog-view-toggle button").forEach((b) =>
+  b.addEventListener("click", () => { setCatalogView(b.dataset.view); loadCatalog(); }));
 
 window.viewAttributes = function (id) {
   const item = itemsCache.find((x) => x.id === id);
@@ -635,6 +682,7 @@ function mergeSummary(a, b) {
    "images_attached","rows_with_warnings","items_matched","rows_unmatched","rows_without_price",
    "images_stored"].forEach((k) => { if (typeof b[k] === "number") out[k] = (a[k] || 0) + b[k]; });
   out.warnings = (a.warnings || []).concat(b.warnings || []);
+  out.item_ids = (a.item_ids || []).concat(b.item_ids || []);  // aligned to input rows
   return out;
 }
 
@@ -725,26 +773,59 @@ function productToRow(p, page) {
     source_row: page, supplier_name: null, supplier_info: {}, attributes: a };
 }
 
-async function resolveSupplierId(id, name) {
-  if (id) return +id;
-  const list = await api.get("/api/suppliers");
-  const s = list.find((x) => (x.name || "").trim().toLowerCase() === (name || "").trim().toLowerCase());
-  return s ? s.id : null;
+// Crop a product's photo from its page image using a normalized [x0,y0,x1,y1] box.
+async function cropToBlob(bitmap, box) {
+  if (!Array.isArray(box) || box.length !== 4) return null;
+  let [x0, y0, x1, y1] = box;
+  if ([x0, y0, x1, y1].some((n) => typeof n !== "number")) return null;
+  // Tolerate boxes given as percentages.
+  if (Math.max(x0, y0, x1, y1) > 1.5) { x0 /= 100; y0 /= 100; x1 /= 100; y1 /= 100; }
+  const sx = Math.max(0, Math.min(x0, x1)) * bitmap.width;
+  const sy = Math.max(0, Math.min(y0, y1)) * bitmap.height;
+  const sw = Math.min(bitmap.width - sx, Math.abs(x1 - x0) * bitmap.width);
+  const sh = Math.min(bitmap.height - sy, Math.abs(y1 - y0) * bitmap.height);
+  if (sw < 12 || sh < 12) return null;
+  const c = document.createElement("canvas");
+  c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext("2d").drawImage(bitmap, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return new Promise((res) => c.toBlob(res, "image/jpeg", 0.85));
 }
 
-// Full AI flow: render -> extract per page -> review -> (on Save) persist + store pages.
+async function uploadItemImage(itemId, filename, blob) {
+  const fd = new FormData();
+  fd.append("file", new File([blob], filename, { type: "image/jpeg" }));
+  fd.append("catalog_item_id", itemId);
+  const r = await fetch("/api/documents", { method: "POST", body: fd });
+  return r.ok;
+}
+
+// Jump to the Catalog tab, filtered to a supplier, so the user sees their gallery.
+function goToSupplierCatalog(supplierId) {
+  const tab = document.querySelector('.tab[data-tab="catalog"]');
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  tab.classList.add("active");
+  document.getElementById("catalog").classList.add("active");
+  loadCatalog().then(() => {
+    const sel = document.getElementById("catalog-supplier-filter");
+    if (supplierId && sel) { sel.value = String(supplierId); loadCatalog(); }
+  });
+}
+
+// Full AI flow: render -> extract per page (name + photo box) -> review ->
+// (on Save) persist rows, then crop each product's photo and attach it.
 async function runVisionFlow(file, supplier, renderSummary) {
   showModalBusy("Rendering catalog pages…");
   const pageBlobs = await renderPdfPages(file);
-  const rows = []; let detected = null; const keepPages = [];
+  const rows = []; const meta = []; let detected = null; let pagesWithProducts = 0;
   for (let i = 0; i < pageBlobs.length; i++) {
     showModalBusy(`Reading page ${i + 1} of ${pageBlobs.length} with AI…`);
     let res;
     try { res = await visionExtractPage(pageBlobs[i]); } catch (e) { res = { products: [] }; }
     if (res.supplier_name && !detected) detected = res.supplier_name;
     const found = (res.products || []).filter((p) => p && p.name);
-    found.forEach((p) => rows.push(productToRow(p, i + 1)));
-    if (found.length) keepPages.push({ page: i + 1, blob: pageBlobs[i] });
+    found.forEach((p) => { rows.push(productToRow(p, i + 1)); meta.push({ pageIdx: i, box: p.box || null }); });
+    if (found.length) pagesWithProducts++;
   }
 
   const supplierName = supplier.name || detected || file.name.replace(/\.pdf$/i, "");
@@ -753,8 +834,7 @@ async function runVisionFlow(file, supplier, renderSummary) {
     document.getElementById("modal-fields").innerHTML =
       `<p>The AI didn't find any products in this PDF — it may not be a product ` +
       `catalog, or the pages are too low-resolution to read.</p>`;
-    setSaveLabel("Save");
-    onSubmit = async () => {};
+    setSaveLabel("Save"); onSubmit = async () => {};
     return;
   }
 
@@ -764,38 +844,54 @@ async function runVisionFlow(file, supplier, renderSummary) {
     `<li>${esc(r.name)}${r.attributes.Material ? ` — <span class="muted">${esc(r.attributes.Material)}</span>` : ""}</li>`).join("");
   const more = rows.length > 40 ? `<li>…and ${rows.length - 40} more</li>` : "";
   document.getElementById("modal-fields").innerHTML = `
-    <p><strong>${rows.length}</strong> product(s) found across ${keepPages.length} page(s),
+    <p><strong>${rows.length}</strong> product(s) found across ${pagesWithProducts} page(s),
        supplier <strong>${esc(supplierName)}</strong>.</p>
-    <p class="muted">Review below, then save. You can edit or delete items afterwards.</p>
+    <p class="muted">Review below, then save — each product's photo is cropped from its page.
+       You can edit or delete items afterwards.</p>
     <ul class="errs">${list}${more}</ul>`;
   setSaveLabel(`Save ${rows.length} products`);
 
-  // On the next Save click, persist rows + store the source pages as collateral.
   onSubmit = async () => {
     const eff = { id: supplier.id || null, name: supplier.id ? null : supplierName };
     showModalBusy("Saving products to the catalog…");
     const summary = await importRowsBatched("catalog-import/rows", eff, { rows, warnings: [] });
-    const supId = await resolveSupplierId(supplier.id, supplierName);
-    let stored = 0;
-    if (supId) {
-      for (let i = 0; i < keepPages.length; i++) {
-        showModalBusy(`Saving catalog pages… (${i + 1}/${keepPages.length})`);
-        const fd = new FormData();
-        fd.append("file", new File([keepPages[i].blob], `page-${keepPages[i].page}.jpg`, { type: "image/jpeg" }));
-        fd.append("supplier_id", supId);
-        const r = await fetch("/api/documents", { method: "POST", body: fd });
-        if (r.ok) stored++;
+    const ids = summary.item_ids || [];
+
+    // Crop + attach each product's photo, grouped by page (one bitmap per page).
+    let photos = 0;
+    const byPage = {};
+    rows.forEach((_, i) => { if (meta[i].box && ids[i]) (byPage[meta[i].pageIdx] = byPage[meta[i].pageIdx] || []).push(i); });
+    const pageIdxs = Object.keys(byPage);
+    let done = 0;
+    const total = pageIdxs.reduce((n, k) => n + byPage[k].length, 0);
+    for (const pk of pageIdxs) {
+      let bitmap;
+      try { bitmap = await createImageBitmap(pageBlobs[pk]); } catch (e) { continue; }
+      for (const i of byPage[pk]) {
+        showModalBusy(`Saving product photos… (${++done}/${total})`);
+        const blob = await cropToBlob(bitmap, meta[i].box);
+        if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) photos++;
       }
+      bitmap.close && bitmap.close();
     }
-    summary.images_attached = (summary.images_attached || 0) + stored;
+    summary.images_attached = (summary.images_attached || 0) + photos;
+
+    const supId = await resolveSupplierId(supplier.id, supplierName);
     document.getElementById("modal-title").textContent = "Import Complete";
     document.getElementById("modal-fields").innerHTML = renderSummary(summary);
     document.getElementById("modal-extra").innerHTML = "";
-    setSaveLabel("Save");
-    onSubmit = async () => {};
-    loadCatalog(); refreshCounts();
+    setSaveLabel("View catalog");
+    onSubmit = async () => { closeModal(); goToSupplierCatalog(supId); };
+    refreshCounts();
     return false;
   };
+}
+
+async function resolveSupplierId(id, name) {
+  if (id) return +id;
+  const list = await api.get("/api/suppliers");
+  const s = list.find((x) => (x.name || "").trim().toLowerCase() === (name || "").trim().toLowerCase());
+  return s ? s.id : null;
 }
 
 function warningList(warnings) {

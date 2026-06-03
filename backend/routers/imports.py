@@ -128,11 +128,13 @@ def _persist_catalog(
     items_created = items_updated = quotes_created = 0
     warnings = list(warnings)
     row_to_item: dict[int, models.CatalogItem] = {}
+    item_ids: list[int | None] = []
 
     for row in rows:
         supplier = resolver.resolve(row.supplier_name, row.supplier_info)
         if supplier is None:
             warnings.append({"row": row.source_row, "warning": "No supplier for this row; skipped"})
+            item_ids.append(None)
             continue
 
         item = None
@@ -155,6 +157,7 @@ def _persist_catalog(
         item.attributes = row.attributes
         db.flush()
         row_to_item[row.source_row] = item
+        item_ids.append(item.id)
 
         if row.has_price:
             db.add(models.Quote(
@@ -172,6 +175,7 @@ def _persist_catalog(
         suppliers_created=resolver.created + suppliers_pre_created,
         images_attached=0,
         rows_with_warnings=len(warnings),
+        item_ids=item_ids,
         warnings=[schemas.ImportWarning(**w) for w in warnings],
     )
     return summary, row_to_item

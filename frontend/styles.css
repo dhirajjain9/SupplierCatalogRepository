@@ -307,6 +307,43 @@ table.attrs tr:last-child th, table.attrs tr:last-child td { border-bottom: none
 .pill.gray { background: var(--surface-2); color: var(--muted); }
 .price { font-variant-numeric: tabular-nums; font-weight: 600; }
 
+.hidden { display: none !important; }
+
+/* view toggle (segmented) */
+.seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-2);
+  border-radius: var(--pill); box-shadow: inset 0 0 0 1px var(--border); }
+.seg button { background: none; border: none; cursor: pointer; color: var(--muted);
+  width: 34px; height: 30px; border-radius: var(--pill); display: grid; place-items: center;
+  transition: background .18s var(--ease), color .18s var(--ease), box-shadow .18s var(--ease); }
+.seg button svg { width: 16px; height: 16px; }
+.seg button:hover { color: var(--text); }
+.seg button.active { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-sm); }
+
+/* product gallery */
+.gallery-grid { display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.gallery-empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 56px 24px; }
+.gallery-empty svg { width: 40px; height: 40px; color: var(--faint); margin-bottom: 12px; opacity: .7; }
+.pcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;
+  transition: box-shadow .2s var(--ease), transform .2s var(--ease); }
+.pcard:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.pcard-img { aspect-ratio: 4 / 3; background: var(--surface-2); cursor: pointer; overflow: hidden; }
+.pcard-img img { width: 100%; height: 100%; object-fit: cover; display: block;
+  transition: transform .3s var(--ease); }
+.pcard-img:hover img { transform: scale(1.04); }
+.pcard-img .ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--faint); }
+.pcard-img .ph svg { width: 30px; height: 30px; }
+.pcard-body { padding: 12px 14px 6px; flex: 1; }
+.pcard-name { font-weight: 600; font-size: 14px; letter-spacing: -.01em; line-height: 1.3;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pcard-sub { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; font-size: 12px; }
+.pcard-spec { margin-top: 8px; font-size: 12.5px; color: var(--muted); line-height: 1.4;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pcard-foot { display: flex; gap: 2px; padding: 6px 8px; border-top: 1px solid var(--border);
+  justify-content: flex-end; }
+.pcard-foot .btn { padding: 5px 8px; font-size: 12.5px; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }

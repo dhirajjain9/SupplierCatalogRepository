@@ -23,11 +23,15 @@ SYSTEM_PROMPT = (
     '"supplier_name": string|null, '
     '"products": [{"name": string, "category": string|null, '
     '"specification": string|null, "color": string|null, "material": string|null, '
-    '"features": string|null, "usage_scenario": string|null}]}\n\n'
+    '"features": string|null, "usage_scenario": string|null, '
+    '"box": [x0, y0, x1, y1] | null}]}\n\n'
     "Rules: only include real products with a visible name. If the page is a "
     "cover/section/other with no products, return an empty products array. "
     "supplier_name: the company/brand if clearly shown (mainly on the cover), "
-    "else null. Do not invent SKUs or prices — this catalog has none."
+    "else null. Do not invent SKUs or prices — this catalog has none.\n"
+    "box: the bounding box of THIS product's main photo, as fractions of the page "
+    "from the top-left: x0,y0 = top-left corner, x1,y1 = bottom-right, each between "
+    "0 and 1 (e.g. [0.05, 0.3, 0.45, 0.8]). Use null if you can't localize a photo."
 )
 
 USER_PROMPT = "Extract the products from this catalog page as JSON per the rules."

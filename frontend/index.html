@@ -55,6 +55,12 @@
       <div class="panel-head">
         <h2>Catalog</h2>
         <div class="actions">
+          <div class="seg" id="catalog-view-toggle" role="tablist">
+            <button data-view="gallery" class="active" title="Gallery view" aria-label="Gallery view">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></button>
+            <button data-view="table" title="Table view" aria-label="Table view">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+          </div>
           <input type="search" id="catalog-search" placeholder="Search name, SKU, description…" />
           <select id="catalog-supplier-filter"><option value="">All suppliers</option></select>
           <select id="catalog-category-filter"><option value="">All product types</option></select>
@@ -72,7 +78,8 @@
             Add Item</button>
         </div>
       </div>
-      <div class="table-wrap"><table id="catalog-table">
+      <div id="catalog-gallery" class="gallery-grid"></div>
+      <div class="table-wrap hidden" id="catalog-table-wrap"><table id="catalog-table">
         <thead><tr>
           <th>Item</th><th>SKU</th><th>Supplier</th><th>Unit</th>
           <th>Category</th><th class="right">Actions</th>
