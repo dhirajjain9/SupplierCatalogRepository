@@ -11,7 +11,7 @@ def test_sheet_csv_url_normalization():
 
 def test_sheet_import_creates_reference_brand(client, monkeypatch):
     csv = (b"Name,SKU,Category\nCeramic Mug,M-1,Drinkware\nGlass Jar,J-1,Storage\n")
-    monkeypatch.setattr(imp, "_fetch_google_sheet", lambda url: csv)
+    monkeypatch.setattr(imp, "_fetch_google_sheet", lambda url, tab=None: csv)
     r = client.post("/api/sheet-import", json={
         "url": "https://docs.google.com/spreadsheets/d/ABC/edit",
         "supplier_name": "Flying Tiger", "type": "reference",
@@ -25,7 +25,7 @@ def test_sheet_import_brand_column_creates_reference_brands(client, monkeypatch)
     # A single sheet with a Brand column + type=reference => each brand becomes a
     # reference (competitor), not a supplier.
     csv = (b"Brand,Name,SKU\nHomeEss,Mug,M1\nNesasia,Vase,V1\nHomeEss,Plate,P1\n")
-    monkeypatch.setattr(imp, "_fetch_google_sheet", lambda url: csv)
+    monkeypatch.setattr(imp, "_fetch_google_sheet", lambda url, tab=None: csv)
     r = client.post("/api/sheet-import", json={
         "url": "https://docs.google.com/spreadsheets/d/ABC/edit", "type": "reference",
     }).json()
@@ -38,7 +38,7 @@ def test_sheet_import_brand_column_creates_reference_brands(client, monkeypatch)
 
 def test_sheet_import_rejects_private_sheet(client, monkeypatch):
     from fastapi import HTTPException
-    def boom(url):
+    def boom(url, tab=None):
         raise HTTPException(400, "This sheet isn't publicly accessible.")
     monkeypatch.setattr(imp, "_fetch_google_sheet", boom)
     r = client.post("/api/sheet-import", json={"url": "https://docs.google.com/spreadsheets/d/X/edit",

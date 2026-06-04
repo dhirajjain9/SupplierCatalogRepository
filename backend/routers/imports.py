@@ -107,12 +107,21 @@ def _form_default_supplier(
     return None, 0
 
 
-def _sheet_csv_url(url: str) -> str:
-    """Turn a Google Sheets share/edit URL into its CSV export URL."""
+def _sheet_csv_url(url: str, tab: str | None = None) -> str:
+    """Turn a Google Sheets share/edit URL into a CSV export URL.
+
+    If ``tab`` (a worksheet name) is given, use the gviz endpoint to fetch that
+    specific tab; otherwise export the tab referenced by the URL's gid (or the
+    first tab).
+    """
     url = (url or "").strip()
     m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
     if m:
         sid = m.group(1)
+        if tab and tab.strip():
+            import urllib.parse
+            return (f"https://docs.google.com/spreadsheets/d/{sid}/gviz/tq"
+                    f"?tqx=out:csv&sheet={urllib.parse.quote(tab.strip())}")
         gid = re.search(r"[#&?]gid=(\d+)", url)
         gid = gid.group(1) if gid else "0"
         return f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
@@ -121,8 +130,8 @@ def _sheet_csv_url(url: str) -> str:
     raise HTTPException(status.HTTP_400_BAD_REQUEST, "That doesn't look like a Google Sheets link.")
 
 
-def _fetch_google_sheet(url: str) -> bytes:
-    csv_url = _sheet_csv_url(url)
+def _fetch_google_sheet(url: str, tab: str | None = None) -> bytes:
+    csv_url = _sheet_csv_url(url, tab)
     req = urllib.request.Request(csv_url, headers={"User-Agent": "Mozilla/5.0"})
     try:
         with urllib.request.urlopen(req, timeout=25) as resp:
@@ -418,7 +427,7 @@ def import_catalog_rows(
 @router.post("/sheet-import", response_model=schemas.ImportSummary)
 def import_sheet(payload: schemas.SheetImport, db: Session = Depends(get_db)) -> schemas.ImportSummary:
     """Import a catalog directly from a shared/published Google Sheet (CSV)."""
-    data = _fetch_google_sheet(payload.url)
+    data = _fetch_google_sheet(payload.url, payload.tab)
     result = catalog_import.parse_catalog_file("sheet.csv", "text/csv", data)
     default, created = _form_default_supplier(
         db, payload.supplier_id, payload.supplier_name, payload.type

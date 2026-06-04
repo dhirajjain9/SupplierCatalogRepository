@@ -1111,12 +1111,14 @@ async function sheetFlow(forceType) {
   const opts = suppliersCache.filter((s) => (s.type || "supplier") === forceType);
   openModal(`Import from Google Sheet${isComp ? " (Competitor)" : ""}`, [
     { name: "url", label: "Google Sheet link — share as ‘Anyone with the link’", required: true },
+    { name: "tab", label: "Tab name (optional — for a specific worksheet, e.g. HomeEss)" },
     { name: "supplier_id", label: `Existing ${noun} (optional)`, type: "select",
       options: [{ value: "", label: `— New ${noun} / from sheet —` }].concat(opts.map((s) => ({ value: s.id, label: s.name }))) },
     { name: "supplier_name", label: `…or new ${noun} name` },
   ], async (v) => {
     showModalBusy("Fetching the sheet…");
     const body = { url: v.url, type: forceType };
+    if (v.tab && v.tab.trim()) body.tab = v.tab.trim();
     if (v.supplier_id) body.supplier_id = +v.supplier_id;
     if (v.supplier_name && v.supplier_name.trim()) body.supplier_name = v.supplier_name.trim();
     const res = await fetch("/api/sheet-import", {
