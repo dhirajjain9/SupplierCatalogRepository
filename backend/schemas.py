@@ -180,8 +180,17 @@ class RowsImport(BaseModel):
     """Batch of parsed rows for catalog/quotation import (bypasses upload size limits)."""
     supplier_id: int | None = None
     supplier_name: str | None = None
+    type: str | None = None  # type for a newly-created supplier ('supplier'|'reference')
     rows: list[ImportRowIn] = []
     warnings: list[ImportWarning] = []
+
+
+class SheetImport(BaseModel):
+    """Import a competitor/supplier catalog straight from a shared Google Sheet."""
+    url: str
+    supplier_id: int | None = None
+    supplier_name: str | None = None
+    type: str | None = None  # 'reference' or 'supplier' (applied to a newly-created supplier)
 
 
 class ImportSummary(BaseModel):

@@ -14,6 +14,8 @@ Endpoints come in two flavours:
 from __future__ import annotations
 
 import io
+import re
+import urllib.request
 import zipfile
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -80,9 +82,12 @@ class _SupplierResolver:
 
 
 def _form_default_supplier(
-    db: Session, supplier_id: int | None, supplier_name: str | None
+    db: Session, supplier_id: int | None, supplier_name: str | None, type: str | None = None,
 ) -> tuple[models.Supplier | None, int]:
-    """Resolve the optional form-level supplier. Returns (supplier, created_count)."""
+    """Resolve the optional form-level supplier. Returns (supplier, created_count).
+
+    ``type`` ('supplier'|'reference') is applied only when creating a new supplier.
+    """
     if supplier_id is not None:
         return _require_supplier(db, supplier_id), 0
     name = (supplier_name or "").strip()
@@ -91,10 +96,44 @@ def _form_default_supplier(
         if existing:
             return existing, 0
         supplier = models.Supplier(name=name)
+        if type in ("supplier", "reference"):
+            supplier.type = type
         db.add(supplier)
         db.flush()
         return supplier, 1
     return None, 0
+
+
+def _sheet_csv_url(url: str) -> str:
+    """Turn a Google Sheets share/edit URL into its CSV export URL."""
+    url = (url or "").strip()
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
+    if m:
+        sid = m.group(1)
+        gid = re.search(r"[#&?]gid=(\d+)", url)
+        gid = gid.group(1) if gid else "0"
+        return f"https://docs.google.com/spreadsheets/d/{sid}/export?format=csv&gid={gid}"
+    if "output=csv" in url or "format=csv" in url:  # already a published CSV link
+        return url
+    raise HTTPException(status.HTTP_400_BAD_REQUEST, "That doesn't look like a Google Sheets link.")
+
+
+def _fetch_google_sheet(url: str) -> bytes:
+    csv_url = _sheet_csv_url(url)
+    req = urllib.request.Request(csv_url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            data = resp.read()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't fetch the sheet: {exc}")
+    if "text/html" in ctype.lower():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This sheet isn't publicly accessible. In Google Sheets set Share → "
+            "'Anyone with the link' (Viewer), or File → Share → Publish to web, then retry.",
+        )
+    return data
 
 
 def _parse_or_400(file: UploadFile, data: bytes) -> catalog_import.ImportResult:
@@ -361,9 +400,24 @@ def import_catalog_rows(
     payload: schemas.RowsImport, db: Session = Depends(get_db),
 ) -> schemas.ImportSummary:
     """Persist a batch of rows parsed in the browser (no file upload size limit)."""
-    default, created = _form_default_supplier(db, payload.supplier_id, payload.supplier_name)
+    default, created = _form_default_supplier(
+        db, payload.supplier_id, payload.supplier_name, payload.type
+    )
     warnings = [w.model_dump() for w in payload.warnings]
     summary, _ = _persist_catalog(db, _rows_to_parsed(payload.rows), warnings, default, created)
+    db.commit()
+    return summary
+
+
+@router.post("/sheet-import", response_model=schemas.ImportSummary)
+def import_sheet(payload: schemas.SheetImport, db: Session = Depends(get_db)) -> schemas.ImportSummary:
+    """Import a catalog directly from a shared/published Google Sheet (CSV)."""
+    data = _fetch_google_sheet(payload.url)
+    result = catalog_import.parse_catalog_file("sheet.csv", "text/csv", data)
+    default, created = _form_default_supplier(
+        db, payload.supplier_id, payload.supplier_name, payload.type
+    )
+    summary, _ = _persist_catalog(db, result.rows, result.warnings, default, created)
     db.commit()
     return summary
 

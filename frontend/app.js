@@ -88,8 +88,9 @@ async function refreshCounts() {
       const el = document.querySelector(`.count[data-count="${key}"]`);
       if (el) el.textContent = n ? ` ${n}` : "";
     };
-    set("suppliers", s.length); set("catalog", c.length);
-    set("quotes", q.length); set("documents", d.length);
+    set("suppliers", s.filter((x) => (x.type || "supplier") !== "reference").length);
+    set("competitors", s.filter((x) => x.type === "reference").length);
+    set("catalog", c.length); set("quotes", q.length); set("documents", d.length);
   } catch (_) { /* counts are best-effort */ }
 }
 
@@ -108,6 +109,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
 
 function refreshTab(name) {
   if (name === "suppliers") loadSuppliers();
+  else if (name === "competitors") loadCompetitors();
   else if (name === "catalog") loadCatalog();
   else if (name === "quotes") loadQuotes();
   else if (name === "documents") loadDocuments();
@@ -189,44 +191,47 @@ document.getElementById("modal-form").addEventListener("submit", async (e) => {
 });
 
 // --------------------------------------------------------------------------- //
-// Suppliers
+// Suppliers (type=supplier) and Competitors (type=reference) — same renderer
 // --------------------------------------------------------------------------- //
-async function loadSuppliers() {
-  const tbody = document.querySelector("#suppliers-table tbody");
-  const q = document.getElementById("supplier-search").value.trim();
+const SRC = {
+  supplier: { tableId: "suppliers-table", searchId: "supplier-search", noun: "supplier",
+              empty: "No suppliers yet", emptySub: "Add a supplier or import a catalog." },
+  reference: { tableId: "competitors-table", searchId: "competitor-search", noun: "competitor",
+               empty: "No competitors yet", emptySub: "Add a competitor brand or import its portfolio." },
+};
+
+async function loadSources(type) {
+  const cfg = SRC[type];
+  const tbody = document.querySelector(`#${cfg.tableId} tbody`);
+  const q = document.getElementById(cfg.searchId).value.trim();
   tbody.innerHTML = skeletonRows(6);
-  const url = "/api/suppliers" + (q ? `?search=${encodeURIComponent(q)}` : "");
-  suppliersCache = await api.get(url);
-  if (!suppliersCache.length) {
+  const params = new URLSearchParams({ type });
+  if (q) params.set("search", q);
+  const list = await api.get(`/api/suppliers?${params}`);
+  if (!list.length) {
     tbody.innerHTML = q
-      ? emptyState(7, ICONS.box, "No matches", `Nothing matches “${q}”.`)
-      : emptyState(7, ICONS.box, "No suppliers yet", "Add your first supplier to get started.");
+      ? emptyState(6, ICONS.box, "No matches", `Nothing matches “${q}”.`)
+      : emptyState(6, ICONS.box, cfg.empty, cfg.emptySub);
     refreshCounts();
     return;
   }
-  tbody.innerHTML = suppliersCache
-    .map(
-      (s) => `<tr>
-        <td>${esc(s.name)}</td>
-        <td><span class="pill ${s.type === "reference" ? "ref" : "gray"}">${s.type === "reference" ? "Reference" : "Supplier"}</span></td>
-        <td>${esc(s.contact_name) || "—"}</td>
-        <td>${esc(s.email) || "—"}</td><td>${esc(s.phone) || "—"}</td>
-        <td>${s.category ? `<span class="pill">${esc(s.category)}</span>` : "—"}</td>
-        <td class="right">
-          <button class="btn link" onclick="editSupplier(${s.id})">Edit</button>
-          <button class="btn danger-text" onclick="deleteSupplier(${s.id})">Delete</button>
-        </td></tr>`
-    )
-    .join("");
+  tbody.innerHTML = list.map((s) => `<tr>
+      <td>${esc(s.name)}</td>
+      <td>${esc(s.contact_name) || "—"}</td>
+      <td>${esc(s.email) || "—"}</td><td>${esc(s.phone) || "—"}</td>
+      <td>${s.category ? `<span class="pill">${esc(s.category)}</span>` : "—"}</td>
+      <td class="right">
+        <button class="btn link" onclick="editSupplier(${s.id},'${type}')">Edit</button>
+        <button class="btn danger-text" onclick="deleteSupplier(${s.id},'${type}')">Delete</button>
+      </td></tr>`).join("");
   refreshCounts();
 }
+const loadSuppliers = () => loadSources("supplier");
+const loadCompetitors = () => loadSources("reference");
 
 function supplierFields(s = {}) {
   return [
     { name: "name", label: "Name", required: true, value: s.name },
-    { name: "type", label: "Type", type: "select", value: s.type || "supplier",
-      options: [{ value: "supplier", label: "Supplier (Chinese source)" },
-                { value: "reference", label: "Reference brand (competitor)" }] },
     { name: "contact_name", label: "Contact name", value: s.contact_name },
     { name: "email", label: "Email", type: "email", value: s.email },
     { name: "phone", label: "Phone", value: s.phone },
@@ -237,37 +242,40 @@ function supplierFields(s = {}) {
 }
 
 function cleanEmpty(values) {
-  // Convert empty strings to null so optional fields stay unset.
   const out = {};
   Object.entries(values).forEach(([k, v]) => (out[k] = v === "" ? null : v));
   return out;
 }
 
-document.getElementById("add-supplier").addEventListener("click", () => {
-  openModal("Add Supplier", supplierFields(), async (v) => {
-    await api.post("/api/suppliers", cleanEmpty(v));
-    toast("Supplier created");
-    loadSuppliers();
+function addSource(type) {
+  const noun = SRC[type].noun;
+  openModal(`Add ${noun[0].toUpperCase() + noun.slice(1)}`, supplierFields(), async (v) => {
+    await api.post("/api/suppliers", { ...cleanEmpty(v), type });
+    toast(`${noun[0].toUpperCase() + noun.slice(1)} created`);
+    loadSources(type);
   });
-});
+}
 
-window.editSupplier = async (id) => {
+window.editSupplier = async (id, type) => {
   const s = await api.get(`/api/suppliers/${id}`);
-  openModal("Edit Supplier", supplierFields(s), async (v) => {
+  openModal("Edit", supplierFields(s), async (v) => {
     await api.put(`/api/suppliers/${id}`, cleanEmpty(v));
-    toast("Supplier updated");
-    loadSuppliers();
+    toast("Saved");
+    loadSources(type || s.type || "supplier");
   });
 };
 
-window.deleteSupplier = async (id) => {
-  if (!confirm("Delete this supplier and all its items, quotes and documents?")) return;
+window.deleteSupplier = async (id, type) => {
+  if (!confirm("Delete this and all its items, quotes and documents?")) return;
   await api.del(`/api/suppliers/${id}`);
-  toast("Supplier deleted");
-  loadSuppliers();
+  toast("Deleted");
+  loadSources(type || "supplier");
 };
 
+document.querySelectorAll("[data-add-supplier]").forEach((b) =>
+  b.addEventListener("click", () => addSource(b.dataset.srctype)));
 document.getElementById("supplier-search").addEventListener("input", debounce(loadSuppliers, 250));
+document.getElementById("competitor-search").addEventListener("input", debounce(loadCompetitors, 250));
 
 // --------------------------------------------------------------------------- //
 // Catalog items
@@ -712,6 +720,7 @@ async function postRows(action, supplier, rows, warnings) {
   const body = { rows, warnings: warnings || [] };
   if (supplier.id) body.supplier_id = +supplier.id;
   if (supplier.name) body.supplier_name = supplier.name;
+  if (supplier.type) body.type = supplier.type;
   const res = await fetch(`/api/${action}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
@@ -874,7 +883,7 @@ async function runVisionFlow(file, supplier, renderSummary) {
   setSaveLabel(`Save ${rows.length} products`);
 
   onSubmit = async () => {
-    const eff = { id: supplier.id || null, name: supplier.id ? null : supplierName };
+    const eff = { id: supplier.id || null, name: supplier.id ? null : supplierName, type: supplier.type };
     showModalBusy("Saving products to the catalog…");
     const summary = await importRowsBatched("catalog-import/rows", eff, { rows, warnings: [] });
     const ids = summary.item_ids || [];
@@ -934,24 +943,27 @@ function warningList(warnings) {
   return `<ul class="errs">${items}${more}</ul>`;
 }
 
-// Generic upload modal. The file is parsed in the browser and sent as small
-// batches (or per-image), so file size never hits the upload limit. Supplier is
-// OPTIONAL (a "Supplier" column, or chosen/typed here). `kind`: catalog | quotation
-// | images. `supplierMode`: "name" shows picker + new-name field; "scope" picker only.
-function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraFooter, supplierMode }) {
+const cap = (s) => s[0].toUpperCase() + s.slice(1);
+
+// Generic upload modal. `forceType` ('supplier'|'reference') fixes which source
+// type the import files under (the path decides it, not a toggle). File is parsed
+// in the browser and sent in small batches / per-image, so size never hits the limit.
+function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraFooter, supplierMode, forceType }) {
+  const noun = forceType === "reference" ? "competitor" : "supplier";
+  const opts = suppliersCache.filter((s) => !forceType || (s.type || "supplier") === forceType);
   const fields = [
-    { name: "supplier_id", label: "Supplier (optional)", type: "select",
+    { name: "supplier_id", label: `${cap(noun)} (optional)`, type: "select",
       options: [{ value: "", label: "— Auto-detect from file —" }]
-        .concat(suppliersCache.map((s) => ({ value: s.id, label: s.name }))) },
+        .concat(opts.map((s) => ({ value: s.id, label: s.name }))) },
   ];
-  if (supplierMode === "name") fields.push({ name: "supplier_name", label: "…or new supplier name (optional)" });
+  if (supplierMode === "name") fields.push({ name: "supplier_name", label: `…or new ${noun} name (optional)` });
   fields.push({ name: "file", label: fileLabel, type: "file", required: true, accept });
 
   openModal(title, fields, async (v, form) => {
     const fileInput = form.querySelector('input[name="file"]');
     if (!fileInput.files.length) throw new Error("Please choose a file");
     const file = fileInput.files[0];
-    const supplier = { id: v.supplier_id || null, name: (v.supplier_name || "").trim() || null };
+    const supplier = { id: v.supplier_id || null, name: (v.supplier_name || "").trim() || null, type: forceType };
 
     showModalBusy("Parsing file…");
     let summary;
@@ -959,7 +971,6 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
       summary = await runImageImport(file, supplier.id);
     } else {
       const parsed = await parseCatalogFile(file);
-      // Image-only PDF (no text layer): switch to AI vision extraction.
       const isPdf = /\.pdf$/i.test(file.name);
       if (kind === "catalog" && isPdf && !parsed.rows.length) {
         if (!visionEnabled) {
@@ -967,7 +978,7 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
             + "isn't enabled (set ANTHROPIC_API_KEY on the server), so please upload a CSV/Excel.");
         }
         await runVisionFlow(file, supplier, renderSummary);
-        return false;  // runVisionFlow drives its own review → save → summary
+        return false;
       }
       const action = kind === "catalog" ? "catalog-import/rows" : "quotation-import/rows";
       summary = await importRowsBatched(action, supplier, parsed);
@@ -1036,67 +1047,96 @@ async function runImageImport(file, supplierId) {
   return { images_stored: stored, images_unmatched: unmatched, files_skipped: skipped };
 }
 
-document.getElementById("import-catalog").addEventListener("click", async () => {
-  await ensureSuppliers();
-  openUploadModal({
-    title: "Import Catalog",
-    kind: "catalog",
-    supplierMode: "name",
-    accept: ".csv,.xlsx,.pdf",
-    fileLabel: "Catalog file (.csv, .xlsx, .pdf) — any size. Image-only PDFs are read by AI.",
-    extraFooter: `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`,
-    renderSummary: (s) => `
-      <p><strong>${s.rows_captured}</strong> row(s) captured —
-         <strong>${s.items_created}</strong> created,
-         <strong>${s.items_updated}</strong> updated,
-         <strong>${s.quotes_created}</strong> quotes,
-         <strong>${s.images_attached || 0}</strong> images${
-           s.suppliers_created ? `, <strong>${s.suppliers_created}</strong> new supplier(s)` : ""}.</p>
-      <p class="muted">Tip: include a “Supplier” column to file items under different suppliers.</p>
-      ${s.rows_with_warnings
-          ? `<p>${s.rows_with_warnings} row(s) imported with warnings:</p>${warningList(s.warnings)}`
-          : `<p>No warnings. 🎉</p>`}`,
-  });
-});
+const catalogSummaryHtml = (s) => `
+  <p><strong>${s.rows_captured}</strong> row(s) captured —
+     <strong>${s.items_created}</strong> created,
+     <strong>${s.items_updated}</strong> updated,
+     <strong>${s.quotes_created}</strong> quotes,
+     <strong>${s.images_attached || 0}</strong> images${
+       s.suppliers_created ? `, <strong>${s.suppliers_created}</strong> new source(s)` : ""}.</p>
+  ${s.rows_with_warnings
+      ? `<p>${s.rows_with_warnings} row(s) imported with warnings:</p>${warningList(s.warnings)}`
+      : `<p>No warnings. 🎉</p>`}`;
 
-document.getElementById("import-quotation").addEventListener("click", async () => {
-  await ensureSuppliers();
-  openUploadModal({
-    title: "Import Quotation (Step 2)",
-    kind: "quotation",
-    supplierMode: "name",
-    accept: ".csv,.xlsx,.pdf",
-    fileLabel: "Quotation file with SKU + price + MOQ — any size",
-    renderSummary: (s) => `
-      <p><strong>${s.quotes_created}</strong> quote(s) recorded across
-         <strong>${s.items_matched}</strong> catalog item(s).</p>
-      <p class="muted">Rows are matched to existing items by SKU.</p>
-      ${(s.rows_unmatched || s.rows_without_price)
-          ? `<p>${s.rows_unmatched} unmatched, ${s.rows_without_price} without a price:</p>
-             ${warningList(s.warnings)}`
-          : `<p>All rows matched. 🎉</p>`}`,
-  });
-});
+const quotationSummaryHtml = (s) => `
+  <p><strong>${s.quotes_created}</strong> quote(s) recorded across
+     <strong>${s.items_matched}</strong> catalog item(s).</p>
+  <p class="muted">Rows are matched to existing items by SKU.</p>
+  ${(s.rows_unmatched || s.rows_without_price)
+      ? `<p>${s.rows_unmatched} unmatched, ${s.rows_without_price} without a price:</p>${warningList(s.warnings)}`
+      : `<p>All rows matched. 🎉</p>`}`;
 
-document.getElementById("import-images").addEventListener("click", async () => {
-  await ensureSuppliers();
-  openUploadModal({
-    title: "Import Product Images",
-    kind: "images",
-    supplierMode: "scope",
-    accept: ".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
-    fileLabel: "A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
-    renderSummary: (s) => {
-      const unmatched = (s.images_unmatched || []).map((f) => `<li>${esc(f)}</li>`).join("");
-      const skipped = (s.files_skipped || []).map((f) => `<li>${esc(f)}</li>`).join("");
-      return `
-        <p><strong>${s.images_stored}</strong> image(s) matched to products by SKU.</p>
-        ${unmatched ? `<p>No matching SKU for:</p><ul class="errs">${unmatched}</ul>` : ""}
-        ${skipped ? `<p class="muted">Skipped non-images:</p><ul class="errs">${skipped}</ul>` : ""}
-        ${!unmatched && !skipped ? `<p>All images matched. 🎉</p>` : ""}`;
-    },
+const imagesSummaryHtml = (s) => {
+  const unmatched = (s.images_unmatched || []).map((f) => `<li>${esc(f)}</li>`).join("");
+  const skipped = (s.files_skipped || []).map((f) => `<li>${esc(f)}</li>`).join("");
+  return `
+    <p><strong>${s.images_stored}</strong> image(s) matched to products by SKU.</p>
+    ${unmatched ? `<p>No matching SKU for:</p><ul class="errs">${unmatched}</ul>` : ""}
+    ${skipped ? `<p class="muted">Skipped non-images:</p><ul class="errs">${skipped}</ul>` : ""}
+    ${!unmatched && !skipped ? `<p>All images matched. 🎉</p>` : ""}`;
+};
+
+// File/AI imports — `forceType` is set by which tab's button was clicked.
+async function importFlow(kind, forceType) {
+  suppliersCache = await api.get("/api/suppliers");
+  const isComp = forceType === "reference";
+  if (kind === "catalog") {
+    openUploadModal({
+      title: isComp ? "Import Competitor Portfolio" : "Import Supplier Catalog",
+      kind: "catalog", forceType, supplierMode: "name", accept: ".csv,.xlsx,.pdf",
+      fileLabel: `${isComp ? "Portfolio" : "Catalog"} file (.csv, .xlsx, .pdf) — any size. Image-only PDFs are read by AI.`,
+      extraFooter: `<a class="btn link" href="/api/catalog-import/template">Download CSV template</a>`,
+      renderSummary: catalogSummaryHtml,
+    });
+  } else if (kind === "quotation") {
+    openUploadModal({
+      title: "Import Quotation (Step 2)", kind: "quotation", forceType, supplierMode: "name",
+      accept: ".csv,.xlsx,.pdf", fileLabel: "Quotation file with SKU + price + MOQ — any size",
+      renderSummary: quotationSummaryHtml,
+    });
+  } else {
+    openUploadModal({
+      title: "Import Product Images", kind: "images", forceType, supplierMode: "scope",
+      accept: ".zip,.jpg,.jpeg,.png,.gif,.webp,.bmp",
+      fileLabel: "A .zip of images, or a single image (named by SKU, e.g. BH-01.jpg)",
+      renderSummary: imagesSummaryHtml,
+    });
+  }
+}
+
+// Import straight from a shared/published Google Sheet (server fetches it).
+async function sheetFlow(forceType) {
+  suppliersCache = await api.get("/api/suppliers");
+  const isComp = forceType === "reference"; const noun = isComp ? "competitor" : "supplier";
+  const opts = suppliersCache.filter((s) => (s.type || "supplier") === forceType);
+  openModal(`Import from Google Sheet${isComp ? " (Competitor)" : ""}`, [
+    { name: "url", label: "Google Sheet link — share as ‘Anyone with the link’", required: true },
+    { name: "supplier_id", label: `Existing ${noun} (optional)`, type: "select",
+      options: [{ value: "", label: `— New ${noun} / from sheet —` }].concat(opts.map((s) => ({ value: s.id, label: s.name }))) },
+    { name: "supplier_name", label: `…or new ${noun} name` },
+  ], async (v) => {
+    showModalBusy("Fetching the sheet…");
+    const body = { url: v.url, type: forceType };
+    if (v.supplier_id) body.supplier_id = +v.supplier_id;
+    if (v.supplier_name && v.supplier_name.trim()) body.supplier_name = v.supplier_name.trim();
+    const res = await fetch("/api/sheet-import", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const s = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(s.detail || "Sheet import failed");
+    document.getElementById("modal-title").textContent = "Import Complete";
+    document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(s);
+    document.getElementById("modal-extra").innerHTML = "";
+    onSubmit = async () => {};
+    loadCatalog(); refreshCounts();
+    return false;
   });
-});
+}
+
+document.querySelectorAll("[data-import]").forEach((b) => b.addEventListener("click", () => {
+  const kind = b.dataset.import, type = b.dataset.srctype;
+  if (kind === "sheet") sheetFlow(type); else importFlow(kind, type);
+}));
 
 // --------------------------------------------------------------------------- //
 // Quotes
