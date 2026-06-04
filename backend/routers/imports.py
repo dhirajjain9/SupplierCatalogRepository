@@ -53,9 +53,10 @@ class _SupplierResolver:
     """Find-or-create suppliers by name within a single import, caching results
     and counting how many were newly created."""
 
-    def __init__(self, db: Session, default: models.Supplier | None):
+    def __init__(self, db: Session, default: models.Supplier | None, default_type: str | None = None):
         self.db = db
         self.default = default
+        self.default_type = default_type if default_type in ("supplier", "reference") else None
         self.created = 0
         self._cache: dict[str, models.Supplier] = {}
         if default is not None:
@@ -70,6 +71,8 @@ class _SupplierResolver:
         supplier = self._cache.get(key) or _existing_supplier(self.db, name)
         if supplier is None:
             supplier = models.Supplier(name=name)
+            if self.default_type:
+                supplier.type = self.default_type
             self.db.add(supplier)
             self.created += 1
         # Enrich blank contact fields from the file when available.
@@ -149,13 +152,14 @@ def _parse_or_400(file: UploadFile, data: bytes) -> catalog_import.ImportResult:
 def _persist_catalog(
     db: Session, rows: list[catalog_import.ParsedRow], warnings: list[dict],
     default_supplier: models.Supplier | None, suppliers_pre_created: int = 0,
+    source_type: str | None = None,
 ) -> tuple[schemas.ImportSummary, dict[int, models.CatalogItem]]:
     """Upsert parsed rows into items/quotes. Does NOT commit (caller commits).
 
     Returns the summary and a {source_row: item} map (used to attach embedded
     images on the file-upload path).
     """
-    resolver = _SupplierResolver(db, default_supplier)
+    resolver = _SupplierResolver(db, default_supplier, source_type)
     has_file_supplier = any(r.supplier_name for r in rows)
     if default_supplier is None and not has_file_supplier:
         raise HTTPException(
@@ -404,7 +408,9 @@ def import_catalog_rows(
         db, payload.supplier_id, payload.supplier_name, payload.type
     )
     warnings = [w.model_dump() for w in payload.warnings]
-    summary, _ = _persist_catalog(db, _rows_to_parsed(payload.rows), warnings, default, created)
+    summary, _ = _persist_catalog(
+        db, _rows_to_parsed(payload.rows), warnings, default, created, source_type=payload.type
+    )
     db.commit()
     return summary
 
@@ -417,7 +423,9 @@ def import_sheet(payload: schemas.SheetImport, db: Session = Depends(get_db)) ->
     default, created = _form_default_supplier(
         db, payload.supplier_id, payload.supplier_name, payload.type
     )
-    summary, _ = _persist_catalog(db, result.rows, result.warnings, default, created)
+    summary, _ = _persist_catalog(
+        db, result.rows, result.warnings, default, created, source_type=payload.type
+    )
     db.commit()
     return summary
 
