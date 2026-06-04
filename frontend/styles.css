@@ -324,6 +324,13 @@ table.attrs tr:last-child th, table.attrs tr:last-child td { border-bottom: none
 table.cov-table td.num, table.cov-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.cov-table tr.master td { background: var(--surface-2); }
 table.cov-table tbody td:first-child { font-weight: 500; }
+
+/* sheet column-mapping preview */
+.map-preview { overflow: auto; max-height: 180px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); margin-bottom: 4px; }
+.map-preview table { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+.map-preview td { border: 1px solid var(--border); padding: 4px 8px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.map-preview td.rownum { color: var(--faint); background: var(--surface-2); position: sticky; left: 0; }
 .price { font-variant-numeric: tabular-nums; font-weight: 600; }
 
 .hidden { display: none !important; }

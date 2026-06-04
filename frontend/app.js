@@ -1104,35 +1104,122 @@ async function importFlow(kind, forceType) {
   }
 }
 
-// Import straight from a shared/published Google Sheet (server fetches it).
+// Guess a column mapping + first data row from preview rows (handles clean
+// headers and header-less scraped sheets).
+function guessMapping(rows) {
+  const n = Math.max(0, ...rows.map((r) => r.length));
+  let headerIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].filter((c) => canonicalHeader(c)).length >= 2) { headerIdx = i; break; }
+  }
+  const map = {};
+  if (headerIdx >= 0) {
+    rows[headerIdx].forEach((c, idx) => {
+      const f = canonicalHeader(c);
+      if (f === "name" && map.name == null) map.name = idx;
+      else if (f === "sku" && map.sku == null) map.sku = idx;
+      else if (f === "category" && map.sub_category == null) map.sub_category = idx;
+      else if (f === "unit_price" && map.price == null) map.price = idx;
+      else if (f === "description" && map.description == null) map.description = idx;
+    });
+    return { firstDataRow: headerIdx + 2, map };
+  }
+  // No header: name = column with the longest average text.
+  const avg = [];
+  for (let c = 0; c < n; c++) {
+    let s = 0, k = 0;
+    rows.forEach((r) => { const v = (r[c] || "").trim(); if (v) { s += v.length; k++; } });
+    avg[c] = k ? s / k : 0;
+  }
+  let best = 0; for (let c = 1; c < n; c++) if (avg[c] > avg[best]) best = c;
+  map.name = best;
+  let fdr = 1;
+  for (let i = 0; i < rows.length; i++) {
+    const v = (rows[i][best] || "").trim();
+    if (v && !/^[\d.,\s]+$/.test(v) && v.length > 3) { fdr = i + 1; break; }
+  }
+  return { firstDataRow: fdr, map };
+}
+
+const MAP_FIELDS = [
+  ["name", "Name", true], ["sku", "SKU", false],
+  ["master_category", "Master category", false], ["sub_category", "Sub-category", false],
+  ["price", "Price", false], ["description", "Description", false],
+];
+
+// Import from a shared Google Sheet: preview → map columns → import.
 async function sheetFlow(forceType) {
   suppliersCache = await api.get("/api/suppliers");
   const isComp = forceType === "reference"; const noun = isComp ? "competitor" : "supplier";
   const opts = suppliersCache.filter((s) => (s.type || "supplier") === forceType);
   openModal(`Import from Google Sheet${isComp ? " (Competitor)" : ""}`, [
     { name: "url", label: "Google Sheet link — share as ‘Anyone with the link’", required: true },
-    { name: "tab", label: "Tab name (optional — for a specific worksheet, e.g. HomeEss)" },
+    { name: "tab", label: "Tab name (optional — e.g. HomeEss)" },
     { name: "supplier_id", label: `Existing ${noun} (optional)`, type: "select",
       options: [{ value: "", label: `— New ${noun} / from sheet —` }].concat(opts.map((s) => ({ value: s.id, label: s.name }))) },
     { name: "supplier_name", label: `…or new ${noun} name` },
   ], async (v) => {
+    const ctx = { url: v.url, tab: (v.tab || "").trim() || null,
+      supplier_id: v.supplier_id ? +v.supplier_id : null,
+      supplier_name: (v.supplier_name || "").trim() || null, type: forceType };
     showModalBusy("Fetching the sheet…");
-    const body = { url: v.url, type: forceType };
-    if (v.tab && v.tab.trim()) body.tab = v.tab.trim();
-    if (v.supplier_id) body.supplier_id = +v.supplier_id;
-    if (v.supplier_name && v.supplier_name.trim()) body.supplier_name = v.supplier_name.trim();
-    const res = await fetch("/api/sheet-import", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
+    const res = await fetch("/api/sheet-preview", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: ctx.url, tab: ctx.tab }) });
+    const pv = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(pv.detail || "Couldn't read the sheet");
+    renderSheetMapping(pv.rows || [], pv.ncols || 0, ctx);
+    return false;
+  });
+}
+
+function renderSheetMapping(rows, ncols, ctx) {
+  const guess = guessMapping(rows);
+  const colOpt = (sel) => `<option value="">— none —</option>` +
+    Array.from({ length: ncols }, (_, c) => {
+      const sample = (rows[guess.firstDataRow - 1] || [])[c] || (rows[guess.firstDataRow] || [])[c] || "";
+      return `<option value="${c}" ${sel === c ? "selected" : ""}>Col ${c + 1}${sample ? " — " + esc(String(sample).slice(0, 24)) : ""}</option>`;
+    }).join("");
+
+  const previewRows = rows.slice(0, 6).map((r, ri) =>
+    `<tr><td class="rownum">${ri + 1}</td>${Array.from({ length: ncols }, (_, c) =>
+      `<td>${esc((r[c] || "").slice(0, 22))}</td>`).join("")}</tr>`).join("");
+
+  const fieldRows = MAP_FIELDS.map(([f, label, req]) =>
+    `<div class="field"><label>${label}${req ? " *" : ""}</label>
+      <select id="map-${f}">${colOpt(guess.map[f])}</select></div>`).join("");
+
+  document.getElementById("modal-title").textContent = "Map columns";
+  document.getElementById("modal-fields").innerHTML = `
+    <p class="muted">Preview — pick which column holds each field, and the first product row.</p>
+    <div class="map-preview"><table><tbody>${previewRows}</tbody></table></div>
+    <div class="field"><label>First product row</label>
+      <input type="number" id="map-firstrow" min="1" value="${guess.firstDataRow}" /></div>
+    ${fieldRows}`;
+  document.getElementById("modal-extra").innerHTML = "";
+  setSaveLabel("Import");
+
+  onSubmit = async () => {
+    const mapping = {};
+    MAP_FIELDS.forEach(([f]) => { const val = document.getElementById(`map-${f}`).value; if (val !== "") mapping[f] = +val; });
+    if (mapping.name == null) throw new Error("Please map the Name column.");
+    const firstRow = Math.max(1, +document.getElementById("map-firstrow").value || 1);
+    showModalBusy("Importing…");
+    const body = { url: ctx.url, tab: ctx.tab, type: ctx.type, first_data_row: firstRow,
+      header_row: firstRow > 1 ? firstRow - 1 : null, mapping };
+    if (ctx.supplier_id) body.supplier_id = ctx.supplier_id;
+    if (ctx.supplier_name) body.supplier_name = ctx.supplier_name;
+    const res = await fetch("/api/sheet-import-mapped", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const s = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(s.detail || "Sheet import failed");
+    if (!res.ok) throw new Error(s.detail || "Import failed");
     document.getElementById("modal-title").textContent = "Import Complete";
     document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(s);
-    document.getElementById("modal-extra").innerHTML = "";
+    setSaveLabel("Save");
     onSubmit = async () => {};
     loadCatalog(); refreshCounts();
     return false;
-  });
+  };
 }
 
 document.querySelectorAll("[data-import]").forEach((b) => b.addEventListener("click", () => {

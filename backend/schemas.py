@@ -194,6 +194,24 @@ class SheetImport(BaseModel):
     type: str | None = None  # 'reference' or 'supplier' (applied to a newly-created supplier)
 
 
+class SheetPreview(BaseModel):
+    url: str
+    tab: str | None = None
+
+
+class MappedSheetImport(BaseModel):
+    """Import a sheet using an explicit column mapping (for scraped/odd layouts)."""
+    url: str
+    tab: str | None = None
+    supplier_id: int | None = None
+    supplier_name: str | None = None
+    type: str | None = None
+    first_data_row: int = 1           # 1-based row where products start
+    header_row: int | None = None     # 1-based row to use as attribute headers (optional)
+    mapping: dict[str, int] = {}      # field -> 0-based column index; field in
+                                      # name|sku|master_category|sub_category|price|description
+
+
 class ImportSummary(BaseModel):
     supplier_id: int | None = None      # set when the import targets one supplier
     rows_captured: int       # every non-empty row in the file is imported

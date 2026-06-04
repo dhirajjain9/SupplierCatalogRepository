@@ -213,6 +213,10 @@ def _persist_catalog(
 
         item.unit = row.unit
         item.category = row.category
+        if row.master_category:
+            item.master_category = row.master_category
+        if row.sub_category:
+            item.sub_category = row.sub_category
         item.description = row.description
         item.attributes = row.attributes
         db.flush()
@@ -420,6 +424,56 @@ def import_catalog_rows(
     summary, _ = _persist_catalog(
         db, _rows_to_parsed(payload.rows), warnings, default, created, source_type=payload.type
     )
+    db.commit()
+    return summary
+
+
+@router.post("/sheet-preview")
+def sheet_preview(payload: schemas.SheetPreview) -> dict:
+    """Return the first rows of a sheet so the UI can offer a column mapping."""
+    import csv as _csv
+    data = _fetch_google_sheet(payload.url, payload.tab)
+    rows = list(_csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace"))))
+    ncols = max((len(r) for r in rows[:30]), default=0)
+    return {"rows": [r[:ncols] for r in rows[:15]], "ncols": ncols, "total_rows": len(rows)}
+
+
+@router.post("/sheet-import-mapped", response_model=schemas.ImportSummary)
+def import_sheet_mapped(payload: schemas.MappedSheetImport, db: Session = Depends(get_db)) -> schemas.ImportSummary:
+    """Import a sheet using an explicit column mapping (handles scraped layouts)."""
+    import csv as _csv
+    data = _fetch_google_sheet(payload.url, payload.tab)
+    grid = list(_csv.reader(io.StringIO(data.decode("utf-8-sig", errors="replace"))))
+    m = payload.mapping
+    if "name" not in m:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please map the Name column.")
+
+    header = grid[payload.header_row - 1] if payload.header_row and payload.header_row <= len(grid) else None
+
+    def cell(row, idx):
+        return (row[idx].strip() if idx is not None and 0 <= idx < len(row) and row[idx] else None)
+
+    parsed: list[catalog_import.ParsedRow] = []
+    for n, raw in enumerate(grid[payload.first_data_row - 1:], start=payload.first_data_row):
+        name = cell(raw, m.get("name"))
+        if not name:
+            continue
+        attrs = {}
+        for i, v in enumerate(raw):
+            v = (v or "").strip()
+            if v:
+                attrs[(header[i].strip() if header and i < len(header) and header[i].strip() else f"Column {i + 1}")] = v
+        sub = cell(raw, m.get("sub_category"))
+        row = catalog_import.ParsedRow(
+            name=name, sku=cell(raw, m.get("sku")),
+            master_category=cell(raw, m.get("master_category")), sub_category=sub,
+            category=sub, description=cell(raw, m.get("description")),
+            source_row=n, attributes=attrs,
+        )
+        parsed.append(row)
+
+    default, created = _form_default_supplier(db, payload.supplier_id, payload.supplier_name, payload.type)
+    summary, _ = _persist_catalog(db, parsed, [], default, created, source_type=payload.type)
     db.commit()
     return summary
 

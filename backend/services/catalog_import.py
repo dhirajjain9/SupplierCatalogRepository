@@ -57,6 +57,8 @@ class ParsedRow:
     sku: str | None = None
     unit: str | None = None
     category: str | None = None
+    master_category: str | None = None
+    sub_category: str | None = None
     description: str | None = None
     unit_price: float | None = None
     currency: str = "USD"
