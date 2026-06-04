@@ -37,6 +37,9 @@ class Supplier(Base):
     phone: Mapped[str | None] = mapped_column(String(50))
     address: Mapped[str | None] = mapped_column(Text)
     category: Mapped[str | None] = mapped_column(String(120), index=True)
+    # "supplier" = a (Chinese) source factory; "reference" = a competitor/retail
+    # brand whose portfolio we benchmark coverage against.
+    type: Mapped[str] = mapped_column(String(20), nullable=False, default="supplier", index=True)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -62,6 +65,9 @@ class CatalogItem(Base):
     description: Mapped[str | None] = mapped_column(Text)
     unit: Mapped[str | None] = mapped_column(String(50))
     category: Mapped[str | None] = mapped_column(String(120), index=True)
+    # AI-derived 2-level taxonomy used for competitive coverage analysis.
+    master_category: Mapped[str | None] = mapped_column(String(120), index=True)
+    sub_category: Mapped[str | None] = mapped_column(String(120), index=True)
     # Full fidelity copy of the original imported row: every column from the
     # source file (including ones that don't map to a typed field above) keyed
     # by its original header. Ensures no data from the upload is lost.

@@ -23,12 +23,15 @@ def list_suppliers(
     db: Session = Depends(get_db),
     search: str | None = Query(default=None, description="Filter by name (substring)"),
     category: str | None = Query(default=None),
+    type: str | None = Query(default=None, description="'supplier' or 'reference'"),
 ) -> list[models.Supplier]:
     stmt = select(models.Supplier).order_by(models.Supplier.name)
     if search:
         stmt = stmt.where(models.Supplier.name.ilike(f"%{search}%"))
     if category:
         stmt = stmt.where(models.Supplier.category == category)
+    if type:
+        stmt = stmt.where(models.Supplier.type == type)
     return list(db.scalars(stmt).all())
 
 

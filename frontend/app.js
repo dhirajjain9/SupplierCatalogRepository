@@ -111,6 +111,7 @@ function refreshTab(name) {
   else if (name === "catalog") loadCatalog();
   else if (name === "quotes") loadQuotes();
   else if (name === "documents") loadDocuments();
+  else if (name === "coverage") loadCoverage();
 }
 
 // --------------------------------------------------------------------------- //
@@ -198,15 +199,17 @@ async function loadSuppliers() {
   suppliersCache = await api.get(url);
   if (!suppliersCache.length) {
     tbody.innerHTML = q
-      ? emptyState(6, ICONS.box, "No matches", `Nothing matches “${q}”.`)
-      : emptyState(6, ICONS.box, "No suppliers yet", "Add your first supplier to get started.");
+      ? emptyState(7, ICONS.box, "No matches", `Nothing matches “${q}”.`)
+      : emptyState(7, ICONS.box, "No suppliers yet", "Add your first supplier to get started.");
     refreshCounts();
     return;
   }
   tbody.innerHTML = suppliersCache
     .map(
       (s) => `<tr>
-        <td>${esc(s.name)}</td><td>${esc(s.contact_name) || "—"}</td>
+        <td>${esc(s.name)}</td>
+        <td><span class="pill ${s.type === "reference" ? "ref" : "gray"}">${s.type === "reference" ? "Reference" : "Supplier"}</span></td>
+        <td>${esc(s.contact_name) || "—"}</td>
         <td>${esc(s.email) || "—"}</td><td>${esc(s.phone) || "—"}</td>
         <td>${s.category ? `<span class="pill">${esc(s.category)}</span>` : "—"}</td>
         <td class="right">
@@ -221,6 +224,9 @@ async function loadSuppliers() {
 function supplierFields(s = {}) {
   return [
     { name: "name", label: "Name", required: true, value: s.name },
+    { name: "type", label: "Type", type: "select", value: s.type || "supplier",
+      options: [{ value: "supplier", label: "Supplier (Chinese source)" },
+                { value: "reference", label: "Reference brand (competitor)" }] },
     { name: "contact_name", label: "Contact name", value: s.contact_name },
     { name: "email", label: "Email", type: "email", value: s.email },
     { name: "phone", label: "Phone", value: s.phone },
@@ -1266,6 +1272,124 @@ window.deleteDocument = async (id) => {
   toast("Document deleted");
   loadDocuments();
 };
+
+// --------------------------------------------------------------------------- //
+// Coverage — competitor portfolio vs supplier catalog (AI-classified taxonomy)
+// --------------------------------------------------------------------------- //
+let taxonomyEnabled = false;
+fetch("/api/taxonomy/config").then((r) => r.json()).then((c) => { taxonomyEnabled = !!c.enabled; }).catch(() => {});
+
+async function loadCoverage() {
+  const body = document.getElementById("coverage-body");
+  body.innerHTML = `<p class="muted">Loading…</p>`;
+  const [suppliers, items] = await Promise.all([api.get("/api/suppliers"), api.get("/api/catalog-items")]);
+  suppliersCache = suppliers;
+  const typeById = {}; suppliers.forEach((s) => (typeById[s.id] = s.type || "supplier"));
+
+  // Reference-brand selector.
+  const brandSel = document.getElementById("coverage-brand");
+  const refs = suppliers.filter((s) => s.type === "reference");
+  const cur = brandSel.value;
+  brandSel.innerHTML = `<option value="">All reference brands</option>` +
+    refs.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  brandSel.value = cur;
+
+  const classified = items.filter((i) => i.master_category);
+  const refItems = items.filter((i) => typeById[i.supplier_id] === "reference"
+    && (!brandSel.value || i.supplier_id === +brandSel.value));
+  const supItems = items.filter((i) => typeById[i.supplier_id] === "supplier");
+
+  if (!refs.length) {
+    body.innerHTML = info("Add a reference brand to benchmark",
+      "Mark a competitor (Nesasia, Flying Tiger…) as a “Reference brand” when adding the supplier, then import its catalog. Suppliers' coverage is measured against it.");
+    return;
+  }
+  if (!classified.length) {
+    body.innerHTML = info("Classify the catalog first",
+      taxonomyEnabled ? "Click “Classify with AI” to derive categories and group every product."
+        : "AI classification isn't enabled (set ANTHROPIC_API_KEY on the server).");
+    return;
+  }
+
+  // Build master -> sub -> {ref, sup} counts (only from classified items).
+  const tree = {};
+  const tally = (list, key) => list.forEach((i) => {
+    if (!i.master_category) return;
+    const m = i.master_category, s = i.sub_category || "—";
+    ((tree[m] = tree[m] || {})[s] = tree[m][s] || { ref: 0, sup: 0 })[key]++;
+  });
+  tally(refItems, "ref"); tally(supItems, "sup");
+
+  // Coverage = of sub-categories the reference covers, how many a supplier also covers.
+  let refSubs = 0, coveredSubs = 0; const gaps = [];
+  Object.entries(tree).forEach(([m, subs]) => Object.entries(subs).forEach(([s, c]) => {
+    if (c.ref > 0) { refSubs++; if (c.sup > 0) coveredSubs++; else gaps.push({ m, s, ref: c.ref }); }
+  }));
+  const pct = refSubs ? Math.round((coveredSubs / refSubs) * 100) : 0;
+  gaps.sort((a, b) => b.ref - a.ref);
+
+  const masters = Object.keys(tree).sort();
+  const rows = masters.map((m) => {
+    const subs = Object.entries(tree[m]).sort((a, b) => b[1].ref - a[1].ref);
+    const subRows = subs.map(([s, c]) => {
+      const status = c.ref === 0 ? `<span class="pill gray">supplier-only</span>`
+        : c.sup > 0 ? `<span class="pill ok">covered</span>` : `<span class="pill gap">gap</span>`;
+      return `<tr><td></td><td>${esc(s)}</td><td class="num">${c.ref || "—"}</td>
+        <td class="num">${c.sup || "—"}</td><td>${status}</td></tr>`;
+    }).join("");
+    const mref = subs.reduce((n, [, c]) => n + c.ref, 0), msup = subs.reduce((n, [, c]) => n + c.sup, 0);
+    return `<tr class="master"><td><strong>${esc(m)}</strong></td><td></td>
+      <td class="num"><strong>${mref || "—"}</strong></td><td class="num"><strong>${msup || "—"}</strong></td><td></td></tr>${subRows}`;
+  }).join("");
+
+  body.innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="card-n">${pct}%</div><div class="card-l">category coverage</div></div>
+      <div class="card"><div class="card-n">${coveredSubs}/${refSubs}</div><div class="card-l">sub-categories covered</div></div>
+      <div class="card"><div class="card-n">${gaps.length}</div><div class="card-l">gaps (competitor has, you don't)</div></div>
+    </div>
+    ${gaps.length ? `<div class="gaps-box"><h3>Biggest gaps</h3>
+      <div class="gap-chips">${gaps.slice(0, 16).map((g) =>
+        `<span class="gap-chip">${esc(g.m)} › ${esc(g.s)} <b>${g.ref}</b></span>`).join("")}</div></div>` : ""}
+    <div class="table-wrap" style="margin-top:18px"><table class="cov-table">
+      <thead><tr><th>Master</th><th>Sub-category</th><th class="num">Competitor</th><th class="num">Suppliers</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+
+function info(title, sub) {
+  return `<div class="empty">${ICONS.box}<div class="empty-title">${esc(title)}</div><div class="empty-sub">${esc(sub)}</div></div>`;
+}
+
+document.getElementById("coverage-brand").addEventListener("change", loadCoverage);
+
+// Derive a taxonomy from the whole catalog, classify every unclassified item, save.
+document.getElementById("classify-ai").addEventListener("click", async () => {
+  if (!taxonomyEnabled) return toast("AI classification isn't enabled (set ANTHROPIC_API_KEY)", true);
+  const body = document.getElementById("coverage-body");
+  const items = await api.get("/api/catalog-items");
+  const todo = items.filter((i) => !i.master_category);
+  if (!todo.length) { toast("Everything is already classified"); return loadCoverage(); }
+  try {
+    body.innerHTML = `<p class="muted">Deriving categories from ${items.length} products…</p>`;
+    const samples = [...new Set(items.map((i) => i.category).filter(Boolean))]
+      .concat(items.slice(0, 300).map((i) => i.name));
+    const tax = await api.post("/api/taxonomy/suggest", { samples });
+    const batches = chunk(todo, 40);
+    let done = 0;
+    for (const b of batches) {
+      body.innerHTML = `<p class="muted">Classifying products… (${done}/${todo.length})</p>`;
+      const res = await api.post("/api/taxonomy/classify", {
+        taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.category })),
+      });
+      if (res.items && res.items.length) await api.put("/api/taxonomy/save", { items: res.items });
+      done += b.length;
+    }
+    toast(`Classified ${done} products`);
+    loadCoverage();
+  } catch (err) {
+    body.innerHTML = info("Classification failed", err.message);
+  }
+});
 
 // --------------------------------------------------------------------------- //
 // Utilities & bootstrap

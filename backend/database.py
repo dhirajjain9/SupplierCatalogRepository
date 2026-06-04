@@ -76,10 +76,20 @@ def _ensure_columns() -> None:
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
     with engine.begin() as conn:
+        if "suppliers" in tables:
+            scols = {c["name"] for c in inspector.get_columns("suppliers")}
+            if "type" not in scols:
+                conn.execute(text(
+                    "ALTER TABLE suppliers ADD COLUMN type VARCHAR(20) NOT NULL DEFAULT 'supplier'"
+                ))
         if "catalog_items" in tables:
             cols = {c["name"] for c in inspector.get_columns("catalog_items")}
             if "attributes" not in cols:
                 conn.execute(text("ALTER TABLE catalog_items ADD COLUMN attributes JSON"))
+            if "master_category" not in cols:
+                conn.execute(text("ALTER TABLE catalog_items ADD COLUMN master_category VARCHAR(120)"))
+            if "sub_category" not in cols:
+                conn.execute(text("ALTER TABLE catalog_items ADD COLUMN sub_category VARCHAR(120)"))
         if "documents" in tables:
             cols = {c["name"] for c in inspector.get_columns("documents")}
             if "kind" not in cols:

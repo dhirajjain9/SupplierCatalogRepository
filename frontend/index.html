@@ -26,6 +26,7 @@
       <button class="tab" data-tab="catalog" role="tab">Catalog<span class="count" data-count="catalog"></span></button>
       <button class="tab" data-tab="quotes" role="tab">Quotes<span class="count" data-count="quotes"></span></button>
       <button class="tab" data-tab="documents" role="tab">Documents<span class="count" data-count="documents"></span></button>
+      <button class="tab" data-tab="coverage" role="tab">Coverage</button>
     </div>
   </nav>
 
@@ -43,7 +44,7 @@
       </div>
       <div class="table-wrap"><table id="suppliers-table">
         <thead><tr>
-          <th>Name</th><th>Contact</th><th>Email</th><th>Phone</th>
+          <th>Name</th><th>Type</th><th>Contact</th><th>Email</th><th>Phone</th>
           <th>Category</th><th class="right">Actions</th>
         </tr></thead>
         <tbody></tbody>
@@ -125,6 +126,19 @@
         </tr></thead>
         <tbody></tbody>
       </table></div>
+    </section>
+    <!-- Coverage -->
+    <section id="coverage" class="panel">
+      <div class="panel-head">
+        <h2>Coverage</h2>
+        <div class="actions">
+          <select id="coverage-brand"><option value="">All reference brands</option></select>
+          <button class="btn" id="classify-ai">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+            Classify with AI</button>
+        </div>
+      </div>
+      <div id="coverage-body"></div>
     </section>
   </main>
 

@@ -16,6 +16,7 @@ class SupplierBase(BaseModel):
     phone: str | None = None
     address: str | None = None
     category: str | None = None
+    type: str = "supplier"  # "supplier" | "reference"
     notes: str | None = None
 
 
@@ -30,6 +31,7 @@ class SupplierUpdate(BaseModel):
     phone: str | None = None
     address: str | None = None
     category: str | None = None
+    type: str | None = None
     notes: str | None = None
 
 
@@ -67,10 +69,40 @@ class CatalogItemOut(CatalogItemBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
     supplier_id: int
+    master_category: str | None = None
+    sub_category: str | None = None
     # Full original imported row (every source column), when the item came
     # from a file import.
     attributes: dict | None = None
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Taxonomy / classification (competitive coverage)
+# --------------------------------------------------------------------------- #
+class TaxonomySuggestIn(BaseModel):
+    samples: list[str] = []           # product names/categories to derive a taxonomy from
+
+
+class ClassifyItemIn(BaseModel):
+    id: int
+    name: str
+    category: str | None = None
+
+
+class ClassifyIn(BaseModel):
+    taxonomy: dict = {}               # {"categories":[{"master":..,"subs":[..]}]}
+    items: list[ClassifyItemIn] = []
+
+
+class ClassifyResult(BaseModel):
+    id: int
+    master_category: str | None = None
+    sub_category: str | None = None
+
+
+class ClassifySaveIn(BaseModel):
+    items: list[ClassifyResult] = []
 
 
 # --------------------------------------------------------------------------- #
