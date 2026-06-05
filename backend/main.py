@@ -18,15 +18,28 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 
+import logging
+
+
+def _safe_init_db() -> None:
+    """Initialize the schema, but never let a transient DB issue crash the whole
+    app at import (which would 500 every route, even static pages). If it fails,
+    we degrade: static pages/health still serve and DB calls retry per request."""
+    try:
+        init_db()
+    except Exception:
+        logging.exception("init_db failed; continuing without it")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    _safe_init_db()
     yield
 
 
 # Some serverless runtimes (e.g. Vercel) don't run ASGI lifespan events, so also
-# initialize the schema at import time. create_all/_ensure_columns are idempotent.
-init_db()
+# initialize the schema at import time. Wrapped so a DB blip can't take the app down.
+_safe_init_db()
 
 
 app = FastAPI(
