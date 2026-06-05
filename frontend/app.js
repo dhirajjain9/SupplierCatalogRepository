@@ -1491,7 +1491,9 @@ function info(title, sub) {
 
 document.getElementById("coverage-brand").addEventListener("change", loadCoverage);
 
-// Derive a taxonomy from the whole catalog, classify every unclassified item, save.
+// Classify unclassified items INTO the existing (competitor) taxonomy so
+// supplier and competitor products share one vocabulary; fall back to deriving
+// a taxonomy only when nothing is classified yet.
 document.getElementById("classify-ai").addEventListener("click", async () => {
   if (!taxonomyEnabled) return toast("AI classification isn't enabled (set ANTHROPIC_API_KEY)", true);
   const body = document.getElementById("coverage-body");
@@ -1499,10 +1501,20 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
   const todo = items.filter((i) => !i.master_category);
   if (!todo.length) { toast("Everything is already classified"); return loadCoverage(); }
   try {
-    body.innerHTML = `<p class="muted">Deriving categories from ${items.length} products…</p>`;
-    const samples = [...new Set(items.map((i) => i.category).filter(Boolean))]
-      .concat(items.slice(0, 300).map((i) => i.name));
-    const tax = await api.post("/api/taxonomy/suggest", { samples });
+    // Prefer the taxonomy that already exists (from competitor imports).
+    const existing = items.filter((i) => i.master_category);
+    let tax;
+    if (existing.length) {
+      const tree = {};
+      existing.forEach((i) => { (tree[i.master_category] = tree[i.master_category] || new Set()).add(i.sub_category || "General"); });
+      tax = { categories: Object.entries(tree).map(([m, subs]) => ({ master: m, subs: [...subs] })) };
+      body.innerHTML = `<p class="muted">Aligning to the competitor taxonomy (${tax.categories.length} categories)…</p>`;
+    } else {
+      body.innerHTML = `<p class="muted">Deriving categories from ${items.length} products…</p>`;
+      const samples = [...new Set(items.map((i) => i.category).filter(Boolean))]
+        .concat(items.slice(0, 300).map((i) => i.name));
+      tax = await api.post("/api/taxonomy/suggest", { samples });
+    }
     const batches = chunk(todo, 40);
     let done = 0;
     for (const b of batches) {
