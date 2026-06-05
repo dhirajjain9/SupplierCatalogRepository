@@ -4,7 +4,7 @@ from __future__ import annotations
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -71,6 +71,30 @@ def chat_files(space: str, db: Session = Depends(get_db)) -> list[dict]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Chat API error: {exc}")
+
+
+_CT_BY_EXT = {
+    "pdf": "application/pdf",
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "xls": "application/vnd.ms-excel",
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+}
+
+
+@router.get("/chat/download")
+def chat_download(filename: str = "file", resourceName: str | None = None,
+                  driveFileId: str | None = None, db: Session = Depends(get_db)) -> Response:
+    """Stream a Chat attachment's raw bytes to the browser so image-only PDFs can
+    run through the same client-side AI vision pipeline as direct uploads."""
+    try:
+        data = google.download_attachment(db, resourceName, driveFileId)
+    except google.NotConnected as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't download the file: {exc}")
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return Response(content=data, media_type=_CT_BY_EXT.get(ext, "application/octet-stream"))
 
 
 class ChatImport(BaseModel):

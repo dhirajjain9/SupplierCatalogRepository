@@ -29,3 +29,10 @@ def test_chat_spaces_requires_connection(client, monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sec")
     r = client.get("/api/chat/spaces")
     assert r.status_code == 401  # not connected yet
+
+
+def test_chat_download_requires_connection(client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sec")
+    r = client.get("/api/chat/download?filename=x.pdf&resourceName=media/abc")
+    assert r.status_code == 401  # not connected yet

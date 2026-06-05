@@ -1382,18 +1382,53 @@ async function chatFlow(forceType) {
 }
 
 async function importChatFile(f, forceType) {
-  const fc = document.getElementById("chat-files");
-  fc.innerHTML = `<p class="muted">Importing ${esc(f.filename || "file")}…</p>`;
-  const supname = (document.getElementById("chat-supname") || {}).value || "";
-  const body = { filename: f.filename, resourceName: f.resourceName, driveFileId: f.driveFileId, type: forceType };
-  if (supname.trim()) body.supplier_name = supname.trim();
+  // Capture the supplier name before showModalBusy wipes the chat fields.
+  const supname = ((document.getElementById("chat-supname") || {}).value || "").trim();
+  const supplier = { id: null, name: supname || null, type: forceType };
+  const filename = f.filename || "catalog";
+
+  // Pull the raw bytes into the browser so image-only PDFs can use the same AI
+  // vision pipeline as direct uploads (and text files parse client-side too).
+  showModalBusy(`Downloading ${filename}…`);
+  let file;
   try {
-    const s = await api.post("/api/chat/import", body);
+    const qs = new URLSearchParams({ filename });
+    if (f.resourceName) qs.set("resourceName", f.resourceName);
+    if (f.driveFileId) qs.set("driveFileId", f.driveFileId);
+    const res = await fetch(`/api/chat/download?${qs.toString()}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Download failed"); }
+    const blob = await res.blob();
+    file = new File([blob], filename, { type: blob.type });
+  } catch (e) {
+    document.getElementById("modal-fields").innerHTML = `<p class="errs">${esc(e.message)}</p>`;
+    setSaveLabel("Close"); onSubmit = async () => true;
+    return;
+  }
+
+  try {
+    showModalBusy("Parsing file…");
+    const parsed = await parseCatalogFile(file);
+    if (/\.pdf$/i.test(filename) && !parsed.rows.length) {
+      if (!visionEnabled) {
+        throw new Error("This PDF is image-based and AI extraction isn't enabled "
+          + "(set ANTHROPIC_API_KEY on the server).");
+      }
+      await runVisionFlow(file, supplier, catalogSummaryHtml);  // takes over the modal
+      return;
+    }
+    const summary = await importRowsBatched("catalog-import/rows", supplier, parsed);
+    if (parsed.images && parsed.images.length) {
+      summary.images_attached = (summary.images_attached || 0)
+        + await attachEmbeddedImages(parsed, supplier.id);
+    }
     document.getElementById("modal-title").textContent = "Import Complete";
-    document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(s);
+    document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(summary);
     setSaveLabel("Done"); onSubmit = async () => {};
     loadCatalog(); refreshCounts();
-  } catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; }
+  } catch (e) {
+    document.getElementById("modal-fields").innerHTML = `<p class="errs">${esc(e.message)}</p>`;
+    setSaveLabel("Close"); onSubmit = async () => true;
+  }
 }
 
 document.querySelectorAll("[data-import]").forEach((b) => b.addEventListener("click", () => {
