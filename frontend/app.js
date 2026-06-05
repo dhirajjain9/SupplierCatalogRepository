@@ -1332,10 +1332,80 @@ function renderSheetMapping(rows, ncols, ctx) {
   };
 }
 
+// Import a catalog attachment straight from Google Chat (owner integration).
+async function chatFlow(forceType) {
+  const st = await api.get("/api/google/status").catch(() => ({}));
+  if (!st.configured) {
+    return toast("Google Chat isn't set up yet — add GOOGLE_CLIENT_ID/SECRET in Vercel.", true);
+  }
+  if (!st.connected) {
+    openModal("Connect Google Chat", [], async () => { window.location.href = "/api/google/connect"; return false; });
+    document.getElementById("modal-fields").innerHTML =
+      `<p>Connect your Google account to import catalogs straight from Chat.</p>
+       <p class="muted">You'll be redirected to Google to authorize, then back here.</p>`;
+    setSaveLabel("Connect Google");
+    return;
+  }
+  const noun = forceType === "reference" ? "competitor" : "supplier";
+  openModal(`Import from Google Chat`, [], async () => true);  // Save just closes
+  const fields = document.getElementById("modal-fields");
+  fields.innerHTML = `<p class="muted">Loading your Chat spaces…</p>`;
+  setSaveLabel("Close");
+  let spaces = [];
+  try { spaces = await api.get("/api/chat/spaces"); }
+  catch (e) { fields.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+  fields.innerHTML = `
+    <div class="field"><label>Space / DM</label>
+      <select id="chat-space">${spaces.map((s) => `<option value="${esc(s.name)}">${esc(s.displayName)}</option>`).join("")}</select></div>
+    <div class="field"><label>New ${noun} name (optional)</label><input id="chat-supname" /></div>
+    <div id="chat-files" class="muted">Loading files…</div>`;
+  const loadFiles = async () => {
+    const sp = document.getElementById("chat-space").value;
+    const fc = document.getElementById("chat-files");
+    fc.innerHTML = "Loading files…";
+    let files = [];
+    try { files = await api.get(`/api/chat/files?space=${encodeURIComponent(sp)}`); }
+    catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+    if (!files.length) { fc.innerHTML = `<p class="muted">No file attachments in this space.</p>`; return; }
+    fc.innerHTML = `<ul class="chat-files">` + files.map((f, i) =>
+      `<li><span>${esc(f.filename || "file")} <span class="muted">· ${esc(f.sender || "")}</span></span>
+        <button class="btn link" data-cf="${i}">Import</button></li>`).join("") + `</ul>`;
+    fc.querySelectorAll("[data-cf]").forEach((b) =>
+      b.addEventListener("click", () => importChatFile(files[+b.dataset.cf], forceType)));
+  };
+  document.getElementById("chat-space").addEventListener("change", loadFiles);
+  if (spaces.length) loadFiles(); else fields.querySelector("#chat-files").innerHTML = `<p class="muted">No Chat spaces found.</p>`;
+}
+
+async function importChatFile(f, forceType) {
+  const fc = document.getElementById("chat-files");
+  fc.innerHTML = `<p class="muted">Importing ${esc(f.filename || "file")}…</p>`;
+  const supname = (document.getElementById("chat-supname") || {}).value || "";
+  const body = { filename: f.filename, resourceName: f.resourceName, driveFileId: f.driveFileId, type: forceType };
+  if (supname.trim()) body.supplier_name = supname.trim();
+  try {
+    const s = await api.post("/api/chat/import", body);
+    document.getElementById("modal-title").textContent = "Import Complete";
+    document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(s);
+    setSaveLabel("Done"); onSubmit = async () => {};
+    loadCatalog(); refreshCounts();
+  } catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; }
+}
+
 document.querySelectorAll("[data-import]").forEach((b) => b.addEventListener("click", () => {
   const kind = b.dataset.import, type = b.dataset.srctype;
-  if (kind === "sheet") sheetFlow(type); else importFlow(kind, type);
+  if (kind === "sheet") sheetFlow(type);
+  else if (kind === "chat") chatFlow(type);
+  else importFlow(kind, type);
 }));
+
+// Surface the result of the Google OAuth redirect.
+(() => {
+  const p = new URLSearchParams(location.search).get("chat");
+  if (p === "connected") toast("Google Chat connected");
+  else if (p === "error") toast("Google Chat connection failed", true);
+  if (p) history.replaceState({}, "", location.pathname);
+})();
 
 // --------------------------------------------------------------------------- //
 // Quotes

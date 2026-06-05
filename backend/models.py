@@ -128,3 +128,14 @@ class Document(Base):
 
     supplier: Mapped["Supplier | None"] = relationship(back_populates="documents")
     catalog_item: Mapped["CatalogItem | None"] = relationship(back_populates="documents")
+
+
+class OAuthToken(Base):
+    """Stored Google OAuth tokens (single-user owner integration, e.g. Google Chat)."""
+    __tablename__ = "oauth_tokens"
+
+    provider: Mapped[str] = mapped_column(String(40), primary_key=True)
+    email: Mapped[str | None] = mapped_column(String(200))
+    refresh_token: Mapped[str | None] = mapped_column(Text)
+    access_token: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
