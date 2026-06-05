@@ -896,9 +896,18 @@ async function renderPdfPages(file, maxWidth = 1600) {
 async function visionExtractPage(blob) {
   const fd = new FormData();
   fd.append("file", new File([blob], "page.jpg", { type: "image/jpeg" }));
-  const res = await fetch("/api/vision/extract", { method: "POST", body: fd });
-  if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "AI extraction failed"); }
-  return res.json();
+  let lastErr = "AI extraction failed";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch("/api/vision/extract", { method: "POST", body: fd });
+    if (res.ok) return res.json();
+    const e = await res.json().catch(() => ({}));
+    lastErr = e.detail || `AI extraction failed (HTTP ${res.status})`;
+    // 400 = misconfig (won't fix on retry); otherwise back off and retry transient
+    // / rate-limit / upstream errors a few times.
+    if (res.status === 400 || attempt === 3) break;
+    await new Promise((r) => setTimeout(r, 800 * Math.pow(2, attempt)));
+  }
+  throw new Error(lastErr);
 }
 
 function productToRow(p, page) {
@@ -959,10 +968,12 @@ async function runVisionFlow(file, supplier, renderSummary) {
   showModalBusy("Rendering catalog pages…");
   const pageBlobs = await renderPdfPages(file);
   const rows = []; const meta = []; let detected = null; let pagesWithProducts = 0;
+  let erroredPages = 0; let lastError = null;
   for (let i = 0; i < pageBlobs.length; i++) {
     showModalBusy(`Reading page ${i + 1} of ${pageBlobs.length} with AI…`);
     let res;
-    try { res = await visionExtractPage(pageBlobs[i]); } catch (e) { res = { products: [] }; }
+    try { res = await visionExtractPage(pageBlobs[i]); }
+    catch (e) { res = { products: [] }; erroredPages++; lastError = e; }
     if (res.supplier_name && !detected) detected = res.supplier_name;
     const found = (res.products || []).filter((p) => p && p.name);
     found.forEach((p) => { rows.push(productToRow(p, i + 1)); meta.push({ pageIdx: i, box: p.box || null }); });
@@ -971,11 +982,19 @@ async function runVisionFlow(file, supplier, renderSummary) {
 
   const supplierName = supplier.name || detected || file.name.replace(/\.pdf$/i, "");
   if (!rows.length) {
-    document.getElementById("modal-title").textContent = "Nothing found";
-    document.getElementById("modal-fields").innerHTML =
-      `<p>The AI didn't find any products in this PDF — it may not be a product ` +
-      `catalog, or the pages are too low-resolution to read.</p>`;
-    setSaveLabel("Save"); onSubmit = async () => {};
+    // If every page errored, the problem is the AI service (e.g. an invalid/expired
+    // API key) — show the real error rather than the generic "nothing found".
+    const allFailed = erroredPages === pageBlobs.length && lastError;
+    document.getElementById("modal-title").textContent = allFailed ? "AI extraction error" : "Nothing found";
+    document.getElementById("modal-fields").innerHTML = allFailed
+      ? `<p>AI extraction failed on all ${pageBlobs.length} page(s).</p>`
+        + `<p class="errs">${esc(lastError.message)}</p>`
+        + `<p class="muted">If this mentions authentication or an API key, update `
+        + `<code>ANTHROPIC_API_KEY</code> in Vercel (the previous key may have been rotated).</p>`
+      : `<p>The AI didn't find any products in this PDF — it may not be a product `
+        + `catalog, or the pages are too low-resolution to read.`
+        + (erroredPages ? ` (${erroredPages} of ${pageBlobs.length} pages errored.)` : "") + `</p>`;
+    setSaveLabel("Close"); onSubmit = async () => true;
     return;
   }
 
