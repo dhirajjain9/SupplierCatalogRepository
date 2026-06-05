@@ -1381,24 +1381,48 @@ async function chatFlow(forceType) {
   if (spaces.length) loadFiles(); else fields.querySelector("#chat-files").innerHTML = `<p class="muted">No Chat spaces found.</p>`;
 }
 
+// Pull a Chat attachment into the browser in byte-range slices, so files larger
+// than the serverless response limit still come through. Returns a File.
+const CHAT_CHUNK = 3 * 1024 * 1024;
+async function downloadChatFileChunked(f, filename) {
+  const fmt = (n) => (n / (1024 * 1024)).toFixed(1) + " MB";
+  const fetchChunk = async (offset) => {
+    const qs = new URLSearchParams({ filename, offset: String(offset), length: String(CHAT_CHUNK) });
+    if (f.resourceName) qs.set("resourceName", f.resourceName);
+    if (f.driveFileId) qs.set("driveFileId", f.driveFileId);
+    const res = await fetch(`/api/chat/download?${qs.toString()}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Download failed"); }
+    const total = +(res.headers.get("X-Total-Size") || 0);
+    return { blob: await res.blob(), total };
+  };
+
+  const first = await fetchChunk(0);
+  const parts = [first.blob];
+  let got = first.blob.size;
+  const total = first.total || got;
+  while (got < total) {
+    showModalBusy(`Downloading ${filename}… ${fmt(got)} / ${fmt(total)}`);
+    const next = await fetchChunk(got);
+    if (!next.blob.size) break;  // guard against a stall
+    parts.push(next.blob);
+    got += next.blob.size;
+  }
+  const type = first.blob.type || "application/octet-stream";
+  return new File(parts, filename, { type });
+}
+
 async function importChatFile(f, forceType) {
   // Capture the supplier name before showModalBusy wipes the chat fields.
   const supname = ((document.getElementById("chat-supname") || {}).value || "").trim();
   const supplier = { id: null, name: supname || null, type: forceType };
   const filename = f.filename || "catalog";
 
-  // Pull the raw bytes into the browser so image-only PDFs can use the same AI
-  // vision pipeline as direct uploads (and text files parse client-side too).
+  // Pull the raw bytes into the browser in chunks so even large files clear the
+  // serverless response limit, then run the same AI/text pipeline as direct uploads.
   showModalBusy(`Downloading ${filename}…`);
   let file;
   try {
-    const qs = new URLSearchParams({ filename });
-    if (f.resourceName) qs.set("resourceName", f.resourceName);
-    if (f.driveFileId) qs.set("driveFileId", f.driveFileId);
-    const res = await fetch(`/api/chat/download?${qs.toString()}`);
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Download failed"); }
-    const blob = await res.blob();
-    file = new File([blob], filename, { type: blob.type });
+    file = await downloadChatFileChunked(f, filename);
   } catch (e) {
     document.getElementById("modal-fields").innerHTML = `<p class="errs">${esc(e.message)}</p>`;
     setSaveLabel("Close"); onSubmit = async () => true;

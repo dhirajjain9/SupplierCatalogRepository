@@ -82,19 +82,31 @@ _CT_BY_EXT = {
 }
 
 
+# Per-chunk download size. Kept well under Vercel's ~4.5 MB serverless response
+# cap so arbitrarily large attachments can be pulled in slices by the browser.
+_CHAT_CHUNK = 3 * 1024 * 1024
+
+
 @router.get("/chat/download")
 def chat_download(filename: str = "file", resourceName: str | None = None,
-                  driveFileId: str | None = None, db: Session = Depends(get_db)) -> Response:
-    """Stream a Chat attachment's raw bytes to the browser so image-only PDFs can
-    run through the same client-side AI vision pipeline as direct uploads."""
+                  driveFileId: str | None = None, offset: int = 0, length: int = 0,
+                  db: Session = Depends(get_db)) -> Response:
+    """Serve one byte-range slice of a Chat attachment so the browser can pull large
+    files in chunks (no single response exceeds the serverless size limit) and run
+    them through the same client-side AI vision / text pipeline as direct uploads."""
+    if length <= 0 or length > _CHAT_CHUNK:
+        length = _CHAT_CHUNK
+    offset = max(0, offset)
     try:
-        data = google.download_attachment(db, resourceName, driveFileId)
+        data, total = google.download_attachment_range(db, resourceName, driveFileId, offset, length)
     except google.NotConnected as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
     except Exception as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't download the file: {exc}")
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    return Response(content=data, media_type=_CT_BY_EXT.get(ext, "application/octet-stream"))
+    return Response(content=data, media_type=_CT_BY_EXT.get(ext, "application/octet-stream"),
+                    headers={"X-Total-Size": str(total),
+                             "Access-Control-Expose-Headers": "X-Total-Size"})
 
 
 class ChatImport(BaseModel):
