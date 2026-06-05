@@ -1,31 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 480">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a9fd6"/>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3aa3da"/>
       <stop offset="1" stop-color="#0e3a57"/>
     </linearGradient>
   </defs>
-  <!-- Person -->
-  <g fill="url(#g)">
-    <circle cx="118" cy="82" r="60"/>
-    <rect x="52" y="172" width="140" height="152" rx="46"/>
-    <rect x="150" y="170" width="158" height="60" rx="30"/>
-    <rect x="70" y="300" width="50" height="158" rx="25"/>
-    <rect x="130" y="300" width="50" height="158" rx="25"/>
-  </g>
-  <!-- Stacked boxes -->
-  <g fill="url(#g)" stroke="#ffffff" stroke-width="7" stroke-linejoin="round">
-    <!-- top cube -->
-    <polygon points="378,255 436,285 378,315 320,285"/>
-    <polygon points="320,285 378,315 378,379 320,349"/>
-    <polygon points="436,285 378,315 378,379 436,349"/>
-    <!-- bottom-left cube -->
-    <polygon points="320,320 378,350 320,380 262,350"/>
-    <polygon points="262,350 320,380 320,444 262,414"/>
-    <polygon points="378,350 320,380 320,444 378,414"/>
-    <!-- bottom-right cube -->
-    <polygon points="436,320 494,350 436,380 378,350"/>
-    <polygon points="378,350 436,380 436,444 378,414"/>
-    <polygon points="494,350 436,380 436,444 494,414"/>
+  <rect width="512" height="512" rx="112" fill="url(#g)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="26" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M256 120 L392 196 L392 332 L256 408 L120 332 L120 196 Z"/>
+    <path d="M120 196 L256 272 L392 196"/>
+    <path d="M256 272 L256 408"/>
   </g>
 </svg>
