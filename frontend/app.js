@@ -1354,6 +1354,8 @@ async function chatFlow(forceType) {
   let spaces = [];
   try { spaces = await api.get("/api/chat/spaces"); }
   catch (e) { fields.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+  // Float "WeChat transfers" (the usual catalog space) to the top so it's the default.
+  spaces.sort((a, b) => (/wechat/i.test(b.displayName || "") ? 1 : 0) - (/wechat/i.test(a.displayName || "") ? 1 : 0));
   fields.innerHTML = `
     <div class="field"><label>Space / DM</label>
       <select id="chat-space">${spaces.map((s) => `<option value="${esc(s.name)}">${esc(s.displayName)}</option>`).join("")}</select></div>
@@ -1367,29 +1369,90 @@ async function chatFlow(forceType) {
     try { files = await api.get(`/api/chat/files?space=${encodeURIComponent(sp)}`); }
     catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
     if (!files.length) { fc.innerHTML = `<p class="muted">No file attachments in this space.</p>`; return; }
-    fc.innerHTML = `<ul class="chat-files">` + files.map((f, i) =>
-      `<li><span>${esc(f.filename || "file")} <span class="muted">· ${esc(f.sender || "")}</span></span>
-        <button class="btn link" data-cf="${i}">Import</button></li>`).join("") + `</ul>`;
-    fc.querySelectorAll("[data-cf]").forEach((b) =>
-      b.addEventListener("click", () => importChatFile(files[+b.dataset.cf], forceType)));
+    fc.innerHTML = `
+      <div class="field"><label>File</label>
+        <select id="chat-file">${files.map((f, i) =>
+          `<option value="${i}">${esc(f.filename || "file")}${f.sender ? " · " + esc(f.sender) : ""}</option>`).join("")}</select></div>
+      <button class="btn primary" id="chat-import-btn">Import selected file</button>`;
+    fc.querySelector("#chat-import-btn").addEventListener("click", () =>
+      importChatFile(files[+document.getElementById("chat-file").value], forceType));
   };
   document.getElementById("chat-space").addEventListener("change", loadFiles);
   if (spaces.length) loadFiles(); else fields.querySelector("#chat-files").innerHTML = `<p class="muted">No Chat spaces found.</p>`;
 }
 
+// Pull a Chat attachment into the browser in byte-range slices, so files larger
+// than the serverless response limit still come through. Returns a File.
+const CHAT_CHUNK = 3 * 1024 * 1024;
+async function downloadChatFileChunked(f, filename) {
+  const fmt = (n) => (n / (1024 * 1024)).toFixed(1) + " MB";
+  const fetchChunk = async (offset) => {
+    const qs = new URLSearchParams({ filename, offset: String(offset), length: String(CHAT_CHUNK) });
+    if (f.resourceName) qs.set("resourceName", f.resourceName);
+    if (f.driveFileId) qs.set("driveFileId", f.driveFileId);
+    const res = await fetch(`/api/chat/download?${qs.toString()}`);
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Download failed"); }
+    const total = +(res.headers.get("X-Total-Size") || 0);
+    return { blob: await res.blob(), total };
+  };
+
+  const first = await fetchChunk(0);
+  const parts = [first.blob];
+  let got = first.blob.size;
+  const total = first.total || got;
+  while (got < total) {
+    showModalBusy(`Downloading ${filename}… ${fmt(got)} / ${fmt(total)}`);
+    const next = await fetchChunk(got);
+    if (!next.blob.size) break;  // guard against a stall
+    parts.push(next.blob);
+    got += next.blob.size;
+  }
+  const type = first.blob.type || "application/octet-stream";
+  return new File(parts, filename, { type });
+}
+
 async function importChatFile(f, forceType) {
-  const fc = document.getElementById("chat-files");
-  fc.innerHTML = `<p class="muted">Importing ${esc(f.filename || "file")}…</p>`;
-  const supname = (document.getElementById("chat-supname") || {}).value || "";
-  const body = { filename: f.filename, resourceName: f.resourceName, driveFileId: f.driveFileId, type: forceType };
-  if (supname.trim()) body.supplier_name = supname.trim();
+  // Capture the supplier name before showModalBusy wipes the chat fields.
+  const supname = ((document.getElementById("chat-supname") || {}).value || "").trim();
+  const supplier = { id: null, name: supname || null, type: forceType };
+  const filename = f.filename || "catalog";
+
+  // Pull the raw bytes into the browser in chunks so even large files clear the
+  // serverless response limit, then run the same AI/text pipeline as direct uploads.
+  showModalBusy(`Downloading ${filename}…`);
+  let file;
   try {
-    const s = await api.post("/api/chat/import", body);
+    file = await downloadChatFileChunked(f, filename);
+  } catch (e) {
+    document.getElementById("modal-fields").innerHTML = `<p class="errs">${esc(e.message)}</p>`;
+    setSaveLabel("Close"); onSubmit = async () => true;
+    return;
+  }
+
+  try {
+    showModalBusy("Parsing file…");
+    const parsed = await parseCatalogFile(file);
+    if (/\.pdf$/i.test(filename) && !parsed.rows.length) {
+      if (!visionEnabled) {
+        throw new Error("This PDF is image-based and AI extraction isn't enabled "
+          + "(set ANTHROPIC_API_KEY on the server).");
+      }
+      await runVisionFlow(file, supplier, catalogSummaryHtml);  // takes over the modal
+      return;
+    }
+    const summary = await importRowsBatched("catalog-import/rows", supplier, parsed);
+    if (parsed.images && parsed.images.length) {
+      summary.images_attached = (summary.images_attached || 0)
+        + await attachEmbeddedImages(parsed, supplier.id);
+    }
     document.getElementById("modal-title").textContent = "Import Complete";
-    document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(s);
+    document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(summary);
     setSaveLabel("Done"); onSubmit = async () => {};
     loadCatalog(); refreshCounts();
-  } catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; }
+  } catch (e) {
+    document.getElementById("modal-fields").innerHTML = `<p class="errs">${esc(e.message)}</p>`;
+    setSaveLabel("Close"); onSubmit = async () => true;
+  }
 }
 
 document.querySelectorAll("[data-import]").forEach((b) => b.addEventListener("click", () => {

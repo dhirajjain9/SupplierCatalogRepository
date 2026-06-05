@@ -167,10 +167,47 @@ def list_attachments(db: Session, space: str, limit: int = 60) -> list[dict]:
     return files
 
 
-def download_attachment(db: Session, resource_name: str | None, drive_file_id: str | None) -> bytes:
-    tok = access_token(db)
+def _media_url(resource_name: str | None, drive_file_id: str | None) -> str:
     if resource_name:
-        return _get(f"{CHAT_BASE}/media/{resource_name}?alt=media", tok, raw=True)
+        return f"{CHAT_BASE}/media/{resource_name}?alt=media"
     if drive_file_id:
-        return _get(f"https://www.googleapis.com/drive/v3/files/{drive_file_id}?alt=media", tok, raw=True)
+        return f"https://www.googleapis.com/drive/v3/files/{drive_file_id}?alt=media"
     raise ValueError("No attachment reference")
+
+
+def download_attachment(db: Session, resource_name: str | None, drive_file_id: str | None) -> bytes:
+    return _get(_media_url(resource_name, drive_file_id), access_token(db), raw=True)
+
+
+def download_attachment_range(
+    db: Session, resource_name: str | None, drive_file_id: str | None,
+    offset: int, length: int,
+) -> tuple[bytes, int]:
+    """Download a byte window [offset, offset+length) of a Chat/Drive attachment.
+
+    Returns (chunk_bytes, total_size). Lets the browser pull large files in small
+    slices so no single serverless response exceeds Vercel's size limit. If Google
+    ignores the Range header (returns the whole file), we slice it ourselves so the
+    response stays small either way.
+    """
+    url = _media_url(resource_name, drive_file_id)
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {access_token(db)}",
+        "Range": f"bytes={offset}-{offset + length - 1}",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = resp.read()
+            content_range = resp.headers.get("Content-Range")  # e.g. "bytes 0-999/12345"
+            partial = resp.status == 206
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", "replace")[:600]
+        except Exception:
+            body = ""
+        raise RuntimeError(f"{e.code} {e.reason} — {body}") from None
+    if partial and content_range and "/" in content_range:
+        total = int(content_range.rsplit("/", 1)[-1])
+        return data, total
+    # Range not honored: `data` is the full file — return just the requested window.
+    return data[offset:offset + length], len(data)
