@@ -182,6 +182,22 @@ def _persist_catalog(
     row_to_item: dict[int, models.CatalogItem] = {}
     item_ids: list[int | None] = []
 
+    # Preload each supplier's existing items once into {sku} / {name} lookups so
+    # we don't issue a SELECT per row (keeps large imports fast). The cache is
+    # updated as we insert, so duplicates within one import collapse too.
+    caches: dict[int, dict] = {}
+
+    def _cache(sid: int) -> dict:
+        if sid not in caches:
+            c = {"sku": {}, "name": {}}
+            for it in db.scalars(select(models.CatalogItem).where(models.CatalogItem.supplier_id == sid)).all():
+                if it.sku:
+                    c["sku"][it.sku] = it
+                else:
+                    c["name"][(it.name or "").strip().lower()] = it
+            caches[sid] = c
+        return caches[sid]
+
     for row in rows:
         supplier = resolver.resolve(row.supplier_name, row.supplier_info)
         if supplier is None:
@@ -189,24 +205,17 @@ def _persist_catalog(
             item_ids.append(None)
             continue
 
-        item = None
-        if row.sku:
-            item = db.scalar(select(models.CatalogItem).where(
-                models.CatalogItem.supplier_id == supplier.id,
-                models.CatalogItem.sku == row.sku,
-            ))
-        elif row.name:
-            # No SKU (e.g. AI/image catalogs): de-duplicate by name within the
-            # supplier so re-imports update in place instead of piling up.
-            item = db.scalar(select(models.CatalogItem).where(
-                models.CatalogItem.supplier_id == supplier.id,
-                models.CatalogItem.sku.is_(None),
-                func.lower(models.CatalogItem.name) == row.name.strip().lower(),
-            ))
+        c = _cache(supplier.id)
+        namekey = (row.name or "").strip().lower()
+        item = c["sku"].get(row.sku) if row.sku else c["name"].get(namekey)
         if item is None:
             item = models.CatalogItem(supplier_id=supplier.id, name=row.name, sku=row.sku)
             db.add(item)
             items_created += 1
+            if row.sku:
+                c["sku"][row.sku] = item
+            elif namekey:
+                c["name"][namekey] = item
         else:
             item.name = row.name
             items_updated += 1
