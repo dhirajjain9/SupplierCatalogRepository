@@ -1655,7 +1655,7 @@ document.getElementById("cleanup-junk").addEventListener("click", () => {
       const r = await api.post("/api/catalog-items/cleanup", {});
       fields.innerHTML = `<p><strong>Removed ${r.count}</strong> junk row(s). 🎉</p>`;
       setSaveLabel("Done"); onSubmit = async () => {};
-      loadCompetitors(); refreshCounts();
+      loadCatalog(); refreshCounts();
       return false;
     };
     return false;
