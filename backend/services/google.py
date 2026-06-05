@@ -145,7 +145,10 @@ def list_attachments(db: Session, space: str, limit: int = 60) -> list[dict]:
     tok = access_token(db)
     files, page, scanned = [], None, 0
     while scanned < 400 and len(files) < limit:
-        url = f"{CHAT_BASE}/{space}/messages?pageSize=100&orderBy=createTime desc" + (f"&pageToken={page}" if page else "")
+        params = {"pageSize": 100, "orderBy": "createTime desc"}
+        if page:
+            params["pageToken"] = page
+        url = f"{CHAT_BASE}/{space}/messages?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
         data = _get(url, tok)
         for m in data.get("messages", []):
             scanned += 1
