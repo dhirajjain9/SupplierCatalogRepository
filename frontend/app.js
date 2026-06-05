@@ -1354,6 +1354,8 @@ async function chatFlow(forceType) {
   let spaces = [];
   try { spaces = await api.get("/api/chat/spaces"); }
   catch (e) { fields.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+  // Float "WeChat transfers" (the usual catalog space) to the top so it's the default.
+  spaces.sort((a, b) => (/wechat/i.test(b.displayName || "") ? 1 : 0) - (/wechat/i.test(a.displayName || "") ? 1 : 0));
   fields.innerHTML = `
     <div class="field"><label>Space / DM</label>
       <select id="chat-space">${spaces.map((s) => `<option value="${esc(s.name)}">${esc(s.displayName)}</option>`).join("")}</select></div>
