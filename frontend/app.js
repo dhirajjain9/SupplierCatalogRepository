@@ -227,7 +227,100 @@ async function loadSources(type) {
   refreshCounts();
 }
 const loadSuppliers = () => loadSources("supplier");
-const loadCompetitors = () => loadSources("reference");
+
+// --------------------------------------------------------------------------- //
+// Competitors — portfolio cards + drill-in summary (products by master → sub)
+// --------------------------------------------------------------------------- //
+async function loadCompetitors() {
+  const body = document.getElementById("competitors-body");
+  body.innerHTML = `<p class="muted">Loading…</p>`;
+  const q = document.getElementById("competitor-search").value.trim().toLowerCase();
+  const [sups, stats] = await Promise.all([
+    api.get("/api/suppliers?type=reference"), api.get("/api/catalog-items/stats"),
+  ]);
+  let refs = sups;
+  if (q) refs = refs.filter((s) => (s.name || "").toLowerCase().includes(q));
+  if (!refs.length) {
+    body.innerHTML = info("No competitors yet",
+      "Add a competitor brand or import its portfolio (file / Google Sheet).");
+    return;
+  }
+  // per supplier: total + master -> count, and whether classified
+  const bySup = {};
+  stats.forEach((r) => {
+    const b = (bySup[r.supplier_id] = bySup[r.supplier_id] || { total: 0, masters: {}, unclassified: 0 });
+    b.total += r.count;
+    if (r.master_category) b.masters[r.master_category] = (b.masters[r.master_category] || 0) + r.count;
+    else b.unclassified += r.count;
+  });
+  body.innerHTML = `<div class="cards comp-cards">` + refs.map((s) => {
+    const b = bySup[s.id] || { total: 0, masters: {}, unclassified: 0 };
+    const tops = Object.entries(b.masters).sort((a, c) => c[1] - a[1]).slice(0, 4);
+    const maxN = tops.length ? tops[0][1] : 1;
+    const bars = tops.map(([m, n]) =>
+      `<div class="cbar"><span class="cbar-l">${esc(m)}</span>
+        <span class="cbar-track"><span class="cbar-fill" style="width:${Math.round(n / maxN * 100)}%"></span></span>
+        <span class="cbar-n">${n}</span></div>`).join("")
+      || `<p class="muted" style="font-size:12.5px">Not categorized yet — click “Curate categories”.</p>`;
+    return `<div class="ccard">
+      <div class="ccard-head">
+        <div><div class="ccard-name">${esc(s.name)}</div>
+          <div class="muted" style="font-size:12.5px">${b.total} products${b.unclassified ? ` · ${b.unclassified} uncategorized` : ""}</div></div>
+      </div>
+      <div class="ccard-bars">${bars}</div>
+      <div class="ccard-foot">
+        <button class="btn link" onclick="viewCompetitor(${s.id})">Summary →</button>
+        <span class="spacer"></span>
+        <button class="btn link" onclick="editSupplier(${s.id},'reference')">Edit</button>
+        <button class="btn danger-text" onclick="deleteSupplier(${s.id},'reference')">Delete</button>
+      </div></div>`;
+  }).join("") + `</div>`;
+}
+
+window.viewCompetitor = async function (id) {
+  const body = document.getElementById("competitors-body");
+  body.innerHTML = `<p class="muted">Loading…</p>`;
+  const [sups, stats] = await Promise.all([
+    api.get("/api/suppliers?type=reference"), api.get("/api/catalog-items/stats"),
+  ]);
+  const sup = sups.find((s) => s.id === id) || { name: "#" + id };
+  const mine = stats.filter((r) => r.supplier_id === id);
+  const total = mine.reduce((n, r) => n + r.count, 0);
+  // master -> {total, subs:{sub:count}}
+  const tree = {};
+  mine.forEach((r) => {
+    const m = r.master_category || "Uncategorized";
+    const t = (tree[m] = tree[m] || { total: 0, subs: {} });
+    t.total += r.count;
+    t.subs[r.sub_category || "—"] = (t.subs[r.sub_category || "—"] || 0) + r.count;
+  });
+  const masters = Object.entries(tree).sort((a, c) => c[1].total - a[1].total);
+  const sections = masters.map(([m, t]) => {
+    const subs = Object.entries(t.subs).sort((a, c) => c[1] - a[1]);
+    return `<div class="sumrow master"><span>${esc(m)}</span><span class="num">${t.total}</span></div>` +
+      subs.map(([s, n]) => `<div class="sumrow"><span>${esc(s)}</span><span class="num">${n}</span></div>`).join("");
+  }).join("");
+  body.innerHTML = `
+    <div class="detail-head">
+      <button class="btn" onclick="loadCompetitors()">← Competitors</button>
+      <h3>${esc(sup.name)} <span class="muted">· ${total} products</span></h3>
+      <span class="spacer"></span>
+      <button class="btn" onclick="viewSupplierProducts(${id})">View products →</button>
+    </div>
+    <div class="table-wrap sum-table">${sections}</div>`;
+};
+
+// Jump to the Catalog tab filtered to this source.
+window.viewSupplierProducts = function (id) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  document.querySelector('.tab[data-tab="catalog"]').classList.add("active");
+  document.getElementById("catalog").classList.add("active");
+  loadCatalog().then(() => {
+    const sel = document.getElementById("catalog-supplier-filter");
+    if (sel) { sel.value = String(id); loadCatalog(); }
+  });
+};
 
 function supplierFields(s = {}) {
   return [
@@ -335,22 +428,30 @@ async function loadCatalog() {
   const filter = document.getElementById("catalog-supplier-filter");
   const current = filter.value;
   filter.innerHTML =
-    `<option value="">All suppliers</option>` +
-    suppliersCache.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+    `<option value="">All sources</option>` +
+    suppliersCache.map((s) => `<option value="${s.id}">${esc(s.name)}${s.type === "reference" ? " (competitor)" : ""}</option>`).join("");
   filter.value = current;
 
-  const catFilter = document.getElementById("catalog-category-filter");
-  const currentCat = catFilter.value;
-  const categories = await api.get("/api/catalog-items/categories");
-  catFilter.innerHTML =
-    `<option value="">All product types</option>` +
-    categories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  catFilter.value = currentCat;
+  // Master / Sub-category filters (cascading) from the curated taxonomy.
+  const mSel = document.getElementById("catalog-master-filter");
+  const sSel = document.getElementById("catalog-sub-filter");
+  const curMaster = mSel.value, curSub = sSel.value;
+  const stats = await api.get("/api/catalog-items/stats");
+  const masters = [...new Set(stats.map((r) => r.master_category).filter(Boolean))].sort();
+  mSel.innerHTML = `<option value="">All master categories</option>` +
+    masters.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+  mSel.value = masters.includes(curMaster) ? curMaster : "";
+  const subs = [...new Set(stats.filter((r) => !mSel.value || r.master_category === mSel.value)
+    .map((r) => r.sub_category).filter(Boolean))].sort();
+  sSel.innerHTML = `<option value="">All sub-categories</option>` +
+    subs.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+  sSel.value = subs.includes(curSub) ? curSub : "";
 
   const q = document.getElementById("catalog-search").value.trim();
   const params = new URLSearchParams();
   if (filter.value) params.set("supplier_id", filter.value);
-  if (catFilter.value) params.set("category", catFilter.value);
+  if (mSel.value) params.set("master_category", mSel.value);
+  if (sSel.value) params.set("sub_category", sSel.value);
   if (q) params.set("search", q);
   const url = "/api/catalog-items" + (params.toString() ? `?${params}` : "");
   itemsCache = await api.get(url);
@@ -371,7 +472,7 @@ async function loadCatalog() {
     || null;
 
   if (!itemsCache.length) {
-    const filtering = q || filter.value || catFilter.value;
+    const filtering = q || filter.value || mSel.value || sSel.value;
     const title = filtering ? "No matching items" : "No catalog items yet";
     const sub = filtering ? "Try clearing the search or filters." : "Import a catalog or add an item to begin.";
     gallery.innerHTML = `<div class="gallery-empty">${ICONS.box}<div class="empty-title">${title}</div><div class="empty-sub">${sub}</div></div>`;
@@ -479,7 +580,11 @@ window.deleteItem = async (id) => {
 };
 
 document.getElementById("catalog-supplier-filter").addEventListener("change", loadCatalog);
-document.getElementById("catalog-category-filter").addEventListener("change", loadCatalog);
+document.getElementById("catalog-master-filter").addEventListener("change", () => {
+  document.getElementById("catalog-sub-filter").value = "";  // reset sub when master changes
+  loadCatalog();
+});
+document.getElementById("catalog-sub-filter").addEventListener("change", loadCatalog);
 document.getElementById("catalog-search").addEventListener("input", debounce(loadCatalog, 250));
 
 // --------------------------------------------------------------------------- //
@@ -1488,6 +1593,38 @@ async function loadCoverage() {
 function info(title, sub) {
   return `<div class="empty">${ICONS.box}<div class="empty-title">${esc(title)}</div><div class="empty-sub">${esc(sub)}</div></div>`;
 }
+
+// Re-derive ONE consolidated taxonomy across ALL products and re-classify
+// everything into it — so product types are limited and comparable across brands.
+document.getElementById("curate-ai").addEventListener("click", async () => {
+  if (!taxonomyEnabled) return toast("AI isn't enabled (set ANTHROPIC_API_KEY)", true);
+  if (!confirm("Re-derive one consolidated set of categories and re-classify ALL products "
+    + "(competitors + suppliers) into it? This updates every product's master/sub category.")) return;
+  const body = document.getElementById("competitors-body");
+  try {
+    const items = await api.get("/api/catalog-items");
+    if (!items.length) { toast("No products to classify"); return; }
+    body.innerHTML = `<p class="muted">Deriving a consolidated taxonomy from ${items.length} products…</p>`;
+    const uniq = (f) => [...new Set(items.map(f).filter(Boolean))];
+    const samples = uniq((i) => i.master_category).concat(uniq((i) => i.sub_category))
+      .concat(uniq((i) => i.category)).concat(items.slice(0, 400).map((i) => i.name));
+    const tax = await api.post("/api/taxonomy/suggest", { samples });
+    const batches = chunk(items, 40);
+    let done = 0;
+    for (const b of batches) {
+      body.innerHTML = `<p class="muted">Re-classifying products into ${(tax.categories || []).length} categories… (${done}/${items.length})</p>`;
+      const res = await api.post("/api/taxonomy/classify", {
+        taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.sub_category || i.category })),
+      });
+      if (res.items && res.items.length) await api.put("/api/taxonomy/save", { items: res.items });
+      done += b.length;
+    }
+    toast(`Curated ${done} products into ${(tax.categories || []).length} categories`);
+    loadCompetitors();
+  } catch (err) {
+    body.innerHTML = info("Curation failed", err.message);
+  }
+});
 
 document.getElementById("coverage-brand").addEventListener("change", loadCoverage);
 

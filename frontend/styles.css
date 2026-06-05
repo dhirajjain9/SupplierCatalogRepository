@@ -331,6 +331,29 @@ table.cov-table tbody td:first-child { font-weight: 500; }
 .map-preview table { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
 .map-preview td { border: 1px solid var(--border); padding: 4px 8px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .map-preview td.rownum { color: var(--faint); background: var(--surface-2); position: sticky; left: 0; }
+
+/* competitor portfolio cards */
+.comp-cards { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.ccard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-sm); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.ccard-name { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.ccard-bars { display: flex; flex-direction: column; gap: 7px; min-height: 20px; }
+.cbar { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.cbar-l { width: 110px; flex: none; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cbar-track { flex: 1; height: 7px; background: var(--surface-2); border-radius: var(--pill); overflow: hidden; }
+.cbar-fill { display: block; height: 100%; background: var(--accent); border-radius: var(--pill); }
+.cbar-n { width: 38px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.ccard-foot { display: flex; align-items: center; gap: 4px; border-top: 1px solid var(--border); padding-top: 10px; }
+.ccard-foot .spacer { flex: 1; }
+.detail-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.detail-head h3 { font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+.detail-head .spacer { flex: 1; }
+.sum-table { padding: 6px 0; }
+.sumrow { display: flex; justify-content: space-between; padding: 8px 18px; font-size: 14px; border-top: 1px solid var(--border); }
+.sumrow:first-child { border-top: none; }
+.sumrow.master { background: var(--surface-2); font-weight: 600; }
+.sumrow .num { font-variant-numeric: tabular-nums; color: var(--muted); }
+.sumrow.master .num { color: var(--text); }
 .price { font-variant-numeric: tabular-nums; font-weight: 600; }
 
 .hidden { display: none !important; }

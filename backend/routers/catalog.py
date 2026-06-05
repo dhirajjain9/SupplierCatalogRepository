@@ -28,6 +28,8 @@ def list_items(
     db: Session = Depends(get_db),
     supplier_id: int | None = Query(default=None),
     category: str | None = Query(default=None, description="Filter by product type/category"),
+    master_category: str | None = Query(default=None),
+    sub_category: str | None = Query(default=None),
     search: str | None = Query(
         default=None, description="Substring match on name, SKU or description"
     ),
@@ -37,6 +39,10 @@ def list_items(
         stmt = stmt.where(models.CatalogItem.supplier_id == supplier_id)
     if category:
         stmt = stmt.where(models.CatalogItem.category == category)
+    if master_category:
+        stmt = stmt.where(models.CatalogItem.master_category == master_category)
+    if sub_category:
+        stmt = stmt.where(models.CatalogItem.sub_category == sub_category)
     if search:
         like = f"%{search}%"
         stmt = stmt.where(
@@ -57,6 +63,28 @@ def list_categories(db: Session = Depends(get_db)) -> list[str]:
         .order_by(models.CatalogItem.category)
     )
     return [c for c in db.scalars(stmt).all() if c]
+
+
+@router.get("/stats")
+def category_stats(db: Session = Depends(get_db)) -> list[dict]:
+    """Product counts grouped by supplier + master/sub category (for dashboards)."""
+    from sqlalchemy import func
+    rows = db.execute(
+        select(
+            models.CatalogItem.supplier_id,
+            models.CatalogItem.master_category,
+            models.CatalogItem.sub_category,
+            func.count().label("n"),
+        ).group_by(
+            models.CatalogItem.supplier_id,
+            models.CatalogItem.master_category,
+            models.CatalogItem.sub_category,
+        )
+    ).all()
+    return [
+        {"supplier_id": s, "master_category": m, "sub_category": sub, "count": n}
+        for (s, m, sub, n) in rows
+    ]
 
 
 @router.post("", response_model=schemas.CatalogItemOut, status_code=status.HTTP_201_CREATED)

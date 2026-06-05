@@ -62,6 +62,9 @@
         <h2>Competitors</h2>
         <div class="actions">
           <input type="search" id="competitor-search" placeholder="Search competitors…" />
+          <button class="btn" id="curate-ai" title="Consolidate product types with AI across all brands">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
+            Curate categories</button>
           <button class="btn" data-import="catalog" data-srctype="reference">⬆ Portfolio</button>
           <button class="btn" data-import="sheet" data-srctype="reference">⬇ Google Sheet</button>
           <button class="btn" data-import="images" data-srctype="reference">🖼 Images</button>
@@ -70,13 +73,7 @@
             Add Competitor</button>
         </div>
       </div>
-      <div class="table-wrap"><table id="competitors-table">
-        <thead><tr>
-          <th>Name</th><th>Contact</th><th>Email</th><th>Phone</th>
-          <th>Category</th><th class="right">Actions</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table></div>
+      <div id="competitors-body"></div>
     </section>
 
     <!-- Catalog -->
@@ -92,7 +89,8 @@
           </div>
           <input type="search" id="catalog-search" placeholder="Search name, SKU, description…" />
           <select id="catalog-supplier-filter"><option value="">All sources</option></select>
-          <select id="catalog-category-filter"><option value="">All product types</option></select>
+          <select id="catalog-master-filter"><option value="">All master categories</option></select>
+          <select id="catalog-sub-filter"><option value="">All sub-categories</option></select>
           <button class="btn primary" id="add-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Add Item</button>

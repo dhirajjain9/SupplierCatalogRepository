@@ -13,12 +13,19 @@ import os
 from backend.services.vision import DEFAULT_MODEL, VisionNotConfigured, _parse_json, is_configured  # noqa: F401
 
 TAXONOMY_SYSTEM = (
-    "You organize retail products (home, kitchen, lifestyle, etc.) into a clean "
-    "2-level taxonomy. Given a list of product names/categories, return ONLY JSON: "
-    '{"categories": [{"master": "Kitchen", "subs": ["Cookware", "Kitchen Storage", '
-    '"Utility", "Accessory"]}, ...]}. Use a small set of broad master categories '
-    "(e.g. Home, Kitchen, Lifestyle, Bath, Cleaning, Outdoor, Pet, Office) and "
-    "concise sub-categories. Keep names Title Case and consistent."
+    "You build ONE consolidated, comparable 2-level taxonomy for a home/kitchen/"
+    "lifestyle catalog spanning several brands. Given many product names and the "
+    "brands' own (messy, inconsistent) categories, return ONLY JSON: "
+    '{"categories": [{"master": "Kitchen & Dining", "subs": ["Cookware", '
+    '"Drinkware", "Tableware", "Kitchen Storage", "Cutlery"]}, ...]}.\n'
+    "Rules — consolidate AGGRESSIVELY so the taxonomy is small and consistent:\n"
+    "- AT MOST ~10 master categories, each with AT MOST ~8 sub-categories.\n"
+    "- Merge synonyms across brands (e.g. 'Kitchen Essentials', 'Kitchenware', "
+    "'Dining' → one 'Kitchen & Dining'; 'Home Decor', 'Décor & Furnishings' → "
+    "'Decor & Furnishing').\n"
+    "- Sub-categories must be broad product TYPES (e.g. 'Cookware', 'Storage "
+    "Containers', 'Bowls', 'Bedding'), NOT individual products or one-offs.\n"
+    "- Title Case, consistent naming."
 )
 
 CLASSIFY_SYSTEM = (
