@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -68,8 +69,15 @@ def _post_form(url: str, data: dict) -> dict:
 
 def _get(url: str, token: str, raw: bool = False):
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read() if raw else json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read() if raw else json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", "replace")[:600]
+        except Exception:
+            body = ""
+        raise RuntimeError(f"{e.code} {e.reason} — {body}") from None
 
 
 def exchange_code(code: str, redirect_uri: str, db: Session) -> models.OAuthToken:
