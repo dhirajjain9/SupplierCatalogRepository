@@ -372,6 +372,7 @@ table.cov-table tbody td:first-child { font-weight: 500; }
 .gallery-grid { display: grid; gap: 16px;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
 .gallery-empty { grid-column: 1 / -1; text-align: center; color: var(--muted); padding: 56px 24px; }
+.more-note { grid-column: 1 / -1; color: var(--muted); font-size: 13px; padding: 4px 2px 2px; }
 .gallery-empty svg { width: 40px; height: 40px; color: var(--faint); margin-bottom: 12px; opacity: .7; }
 .pcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   overflow: hidden; box-shadow: var(--shadow-sm); display: flex; flex-direction: column;

@@ -7,11 +7,11 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.database import init_db
+from backend.database import get_db, init_db
 from backend.routers import analysis, catalog, documents, imports, quotes, suppliers, vision
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,6 +48,24 @@ app.include_router(analysis.router)
 @app.get("/api/health", tags=["health"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/counts", tags=["health"])
+def counts(db=Depends(get_db)) -> dict[str, int]:
+    """Cheap row counts for the nav badges (avoids pulling full lists)."""
+    from sqlalchemy import func, select
+    from backend import models
+    by_type = dict(db.execute(
+        select(models.Supplier.type, func.count()).group_by(models.Supplier.type)
+    ).all())
+    one = lambda m: db.scalar(select(func.count()).select_from(m))
+    return {
+        "suppliers": sum(n for t, n in by_type.items() if (t or "supplier") != "reference"),
+        "competitors": by_type.get("reference", 0),
+        "catalog": one(models.CatalogItem),
+        "quotes": one(models.Quote),
+        "documents": one(models.Document),
+    }
 
 
 # Serve the single-page frontend. Mounted last so /api/* routes take priority.

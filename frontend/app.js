@@ -80,17 +80,13 @@ function skeletonRows(colspan, rows = 4) {
 // Keep the segmented-nav count badges in sync with the data.
 async function refreshCounts() {
   try {
-    const [s, c, q, d] = await Promise.all([
-      api.get("/api/suppliers"), api.get("/api/catalog-items"),
-      api.get("/api/quotes"), api.get("/api/documents"),
-    ]);
+    const c = await api.get("/api/counts");  // cheap SQL counts, not full lists
     const set = (key, n) => {
       const el = document.querySelector(`.count[data-count="${key}"]`);
       if (el) el.textContent = n ? ` ${n}` : "";
     };
-    set("suppliers", s.filter((x) => (x.type || "supplier") !== "reference").length);
-    set("competitors", s.filter((x) => x.type === "reference").length);
-    set("catalog", c.length); set("quotes", q.length); set("documents", d.length);
+    set("suppliers", c.suppliers); set("competitors", c.competitors);
+    set("catalog", c.catalog); set("quotes", c.quotes); set("documents", c.documents);
   } catch (_) { /* counts are best-effort */ }
 }
 
@@ -481,10 +477,18 @@ async function loadCatalog() {
     return;
   }
 
+  // Cap how many we render at once so huge catalogs (1000s) don't jank the
+  // main thread; the count + filters guide narrowing down.
+  const CAP = 300;
+  const shown = itemsCache.slice(0, CAP);
+  const moreNote = itemsCache.length > CAP
+    ? `<div class="more-note">Showing ${CAP} of ${itemsCache.length} — use the filters or search to narrow down.</div>`
+    : "";
+
   if (catalogView === "gallery") {
-    gallery.innerHTML = itemsCache.map((i) => catalogCard(i, thumbFor(i))).join("");
+    gallery.innerHTML = moreNote + shown.map((i) => catalogCard(i, thumbFor(i))).join("");
   } else {
-    tbody.innerHTML = itemsCache.map((i) => {
+    tbody.innerHTML = shown.map((i) => {
       const t = thumbFor(i);
       const thumb = t
         ? `<img class="thumb" src="${imgUrl(t)}" alt="" />`
@@ -502,6 +506,7 @@ async function loadCatalog() {
           <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
         </td></tr>`;
     }).join("");
+    if (moreNote) tbody.insertAdjacentHTML("afterbegin", `<tr><td colspan="6">${moreNote}</td></tr>`);
   }
   refreshCounts();
 }
@@ -1516,7 +1521,9 @@ fetch("/api/taxonomy/config").then((r) => r.json()).then((c) => { taxonomyEnable
 async function loadCoverage() {
   const body = document.getElementById("coverage-body");
   body.innerHTML = `<p class="muted">Loading…</p>`;
-  const [suppliers, items] = await Promise.all([api.get("/api/suppliers"), api.get("/api/catalog-items")]);
+  // Use the compact stats (counts), not the full item list.
+  const [suppliers, stats] = await Promise.all([
+    api.get("/api/suppliers"), api.get("/api/catalog-items/stats")]);
   suppliersCache = suppliers;
   const typeById = {}; suppliers.forEach((s) => (typeById[s.id] = s.type || "supplier"));
 
@@ -1528,31 +1535,30 @@ async function loadCoverage() {
     refs.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
   brandSel.value = cur;
 
-  const classified = items.filter((i) => i.master_category);
-  const refItems = items.filter((i) => typeById[i.supplier_id] === "reference"
-    && (!brandSel.value || i.supplier_id === +brandSel.value));
-  const supItems = items.filter((i) => typeById[i.supplier_id] === "supplier");
+  const isRef = (r) => typeById[r.supplier_id] === "reference" && (!brandSel.value || r.supplier_id === +brandSel.value);
+  const isSup = (r) => typeById[r.supplier_id] === "supplier";
+  const classifiedTotal = stats.filter((r) => r.master_category).reduce((n, r) => n + r.count, 0);
 
   if (!refs.length) {
-    body.innerHTML = info("Add a reference brand to benchmark",
-      "Mark a competitor (Nesasia, Flying Tiger…) as a “Reference brand” when adding the supplier, then import its catalog. Suppliers' coverage is measured against it.");
+    body.innerHTML = info("Add a competitor to benchmark",
+      "Add a competitor (Home Centre, Nestasia…) on the Competitors tab and import its catalog. Suppliers' coverage is measured against it.");
     return;
   }
-  if (!classified.length) {
-    body.innerHTML = info("Classify the catalog first",
-      taxonomyEnabled ? "Click “Classify with AI” to derive categories and group every product."
+  if (!classifiedTotal) {
+    body.innerHTML = info("Curate categories first",
+      taxonomyEnabled ? "On the Competitors tab, click “Curate categories” to consolidate and classify every product."
         : "AI classification isn't enabled (set ANTHROPIC_API_KEY on the server).");
     return;
   }
 
-  // Build master -> sub -> {ref, sup} counts (only from classified items).
+  // Build master -> sub -> {ref, sup} counts from the stats rows.
   const tree = {};
-  const tally = (list, key) => list.forEach((i) => {
-    if (!i.master_category) return;
-    const m = i.master_category, s = i.sub_category || "—";
-    ((tree[m] = tree[m] || {})[s] = tree[m][s] || { ref: 0, sup: 0 })[key]++;
+  const tally = (rows, key) => rows.forEach((r) => {
+    if (!r.master_category) return;
+    const m = r.master_category, s = r.sub_category || "—";
+    ((tree[m] = tree[m] || {})[s] = tree[m][s] || { ref: 0, sup: 0 })[key] += r.count;
   });
-  tally(refItems, "ref"); tally(supItems, "sup");
+  tally(stats.filter(isRef), "ref"); tally(stats.filter(isSup), "sup");
 
   // Coverage = of sub-categories the reference covers, how many a supplier also covers.
   let refSubs = 0, coveredSubs = 0; const gaps = [];
@@ -1595,16 +1601,16 @@ function info(title, sub) {
 }
 
 // Re-derive ONE consolidated taxonomy across ALL products and re-classify
-// everything into it — so product types are limited and comparable across brands.
-document.getElementById("curate-ai").addEventListener("click", async () => {
+// everything into it. Uses the app modal (not a blocking confirm()) so the
+// click stays responsive, and shows progress.
+document.getElementById("curate-ai").addEventListener("click", () => {
   if (!taxonomyEnabled) return toast("AI isn't enabled (set ANTHROPIC_API_KEY)", true);
-  if (!confirm("Re-derive one consolidated set of categories and re-classify ALL products "
-    + "(competitors + suppliers) into it? This updates every product's master/sub category.")) return;
-  const body = document.getElementById("competitors-body");
-  try {
+  openModal("Curate categories", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    await new Promise((r) => setTimeout(r, 0));  // let the modal paint first
     const items = await api.get("/api/catalog-items");
-    if (!items.length) { toast("No products to classify"); return; }
-    body.innerHTML = `<p class="muted">Deriving a consolidated taxonomy from ${items.length} products…</p>`;
+    if (!items.length) { fields.innerHTML = "<p>No products to classify.</p>"; onSubmit = async () => {}; return false; }
+    fields.innerHTML = `<p class="muted">Deriving a consolidated taxonomy from ${items.length} products…</p>`;
     const uniq = (f) => [...new Set(items.map(f).filter(Boolean))];
     const samples = uniq((i) => i.master_category).concat(uniq((i) => i.sub_category))
       .concat(uniq((i) => i.category)).concat(items.slice(0, 400).map((i) => i.name));
@@ -1612,18 +1618,25 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
     const batches = chunk(items, 40);
     let done = 0;
     for (const b of batches) {
-      body.innerHTML = `<p class="muted">Re-classifying products into ${(tax.categories || []).length} categories… (${done}/${items.length})</p>`;
+      fields.innerHTML = `<p class="muted">Re-classifying products into ${(tax.categories || []).length} categories… (${done}/${items.length})</p>`;
+      await new Promise((r) => setTimeout(r, 0));  // yield to keep UI responsive
       const res = await api.post("/api/taxonomy/classify", {
         taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.sub_category || i.category })),
       });
       if (res.items && res.items.length) await api.put("/api/taxonomy/save", { items: res.items });
       done += b.length;
     }
-    toast(`Curated ${done} products into ${(tax.categories || []).length} categories`);
-    loadCompetitors();
-  } catch (err) {
-    body.innerHTML = info("Curation failed", err.message);
-  }
+    fields.innerHTML = `<p><strong>Curated ${done} products</strong> into ${(tax.categories || []).length} categories. 🎉</p>`;
+    setSaveLabel("Done");
+    onSubmit = async () => {};
+    loadCompetitors(); refreshCounts();
+    return false;
+  });
+  document.getElementById("modal-fields").innerHTML =
+    `<p>Consolidate all product types into one set of categories and re-classify
+       <strong>every</strong> product (competitors + suppliers) into it?</p>
+     <p class="muted">Takes a couple of minutes and uses AI credits.</p>`;
+  setSaveLabel("Curate");
 });
 
 document.getElementById("coverage-brand").addEventListener("change", loadCoverage);
