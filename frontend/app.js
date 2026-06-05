@@ -1369,11 +1369,13 @@ async function chatFlow(forceType) {
     try { files = await api.get(`/api/chat/files?space=${encodeURIComponent(sp)}`); }
     catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
     if (!files.length) { fc.innerHTML = `<p class="muted">No file attachments in this space.</p>`; return; }
-    fc.innerHTML = `<ul class="chat-files">` + files.map((f, i) =>
-      `<li><span>${esc(f.filename || "file")} <span class="muted">· ${esc(f.sender || "")}</span></span>
-        <button class="btn link" data-cf="${i}">Import</button></li>`).join("") + `</ul>`;
-    fc.querySelectorAll("[data-cf]").forEach((b) =>
-      b.addEventListener("click", () => importChatFile(files[+b.dataset.cf], forceType)));
+    fc.innerHTML = `
+      <div class="field"><label>File</label>
+        <select id="chat-file">${files.map((f, i) =>
+          `<option value="${i}">${esc(f.filename || "file")}${f.sender ? " · " + esc(f.sender) : ""}</option>`).join("")}</select></div>
+      <button class="btn primary" id="chat-import-btn">Import selected file</button>`;
+    fc.querySelector("#chat-import-btn").addEventListener("click", () =>
+      importChatFile(files[+document.getElementById("chat-file").value], forceType));
   };
   document.getElementById("chat-space").addEventListener("change", loadFiles);
   if (spaces.length) loadFiles(); else fields.querySelector("#chat-files").innerHTML = `<p class="muted">No Chat spaces found.</p>`;
