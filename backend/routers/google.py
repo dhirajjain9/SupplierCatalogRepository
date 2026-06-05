@@ -17,7 +17,12 @@ router = APIRouter(prefix="/api", tags=["google"])
 
 
 def _redirect_uri(request: Request) -> str:
-    # Honour the external https host (Vercel) when building the OAuth callback.
+    # A fixed GOOGLE_REDIRECT_URI (if set) avoids any host/scheme drift behind
+    # Vercel; otherwise derive it from the request's external host.
+    import os
+    fixed = os.environ.get("GOOGLE_REDIRECT_URI")
+    if fixed:
+        return fixed
     base = str(request.base_url).rstrip("/").replace("http://", "https://")
     return f"{base}/api/google/callback"
 
