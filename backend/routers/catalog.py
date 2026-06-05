@@ -87,6 +87,41 @@ def category_stats(db: Session = Depends(get_db)) -> list[dict]:
     ]
 
 
+@router.post("/cleanup")
+def cleanup_items(dry_run: bool = Query(default=False), db: Session = Depends(get_db)) -> dict:
+    """Find (and optionally delete) non-product rows: banner/summary lines and
+    junk that scraped sheets sometimes include. Pass dry_run=true to preview."""
+    import re
+    banner = re.compile(
+        r"(total products|products with reviews|%?\s*coverage|product types|"
+        r"top \d+ categor|platform reviews|overall avg|avg rating|across \d+ collections)",
+        re.I,
+    )
+    junk_cats = {"assigned category", "unset", "unassigned", "other category"}
+    numeric_only = re.compile(r"^[\d.,%₹★\s/\-]+$")
+    removed = []
+    for it in db.scalars(select(models.CatalogItem)).all():
+        name = (it.name or "").strip()
+        mc = (it.master_category or "").strip().lower()
+        sc = it.sub_category or ""
+        is_junk = (
+            not name
+            or "\n" in name
+            or numeric_only.match(name)
+            or bool(banner.search(name))
+            or "\n" in sc
+            or bool(banner.search(sc))
+            or mc in junk_cats
+        )
+        if is_junk:
+            removed.append(it.name)
+            if not dry_run:
+                db.delete(it)
+    if not dry_run:
+        db.commit()
+    return {"count": len(removed), "names": removed[:100], "dry_run": dry_run}
+
+
 @router.post("", response_model=schemas.CatalogItemOut, status_code=status.HTTP_201_CREATED)
 def create_item(
     payload: schemas.CatalogItemCreate, db: Session = Depends(get_db)

@@ -40,6 +40,21 @@ def test_stats_and_master_sub_filters(client):
     assert len(client.get("/api/catalog-items?sub_category=Cookware").json()) == 1
 
 
+def test_cleanup_removes_junk_rows(client):
+    sid = client.post("/api/suppliers", json={"name": "X", "type": "reference"}).json()["id"]
+    for n in ["Ceramic Mug", "100", "1,606\n Total Products Scraped\n across 203 collections",
+              "Real Plate"]:
+        client.post("/api/catalog-items", json={"name": n, "supplier_id": sid})
+    dry = client.post("/api/catalog-items/cleanup?dry_run=true").json()
+    assert dry["count"] == 2 and dry["dry_run"] is True
+    # nothing deleted on dry run
+    assert len(client.get(f"/api/catalog-items?supplier_id={sid}").json()) == 4
+    done = client.post("/api/catalog-items/cleanup").json()
+    assert done["count"] == 2
+    names = {i["name"] for i in client.get(f"/api/catalog-items?supplier_id={sid}").json()}
+    assert names == {"Ceramic Mug", "Real Plate"}
+
+
 def test_taxonomy_config_disabled_without_key(client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     assert client.get("/api/taxonomy/config").json()["enabled"] is False

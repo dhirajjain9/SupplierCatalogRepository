@@ -1639,6 +1639,31 @@ document.getElementById("curate-ai").addEventListener("click", () => {
   setSaveLabel("Curate");
 });
 
+// Preview + remove banner/summary rows that aren't real products.
+document.getElementById("cleanup-junk").addEventListener("click", () => {
+  openModal("Remove junk rows", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    await new Promise((r) => setTimeout(r, 0));
+    const dry = await api.post("/api/catalog-items/cleanup?dry_run=true", {});
+    if (!dry.count) { fields.innerHTML = "<p>No junk rows found. 🎉</p>"; setSaveLabel("Done"); onSubmit = async () => {}; return false; }
+    const list = dry.names.map((n) => `<li>${esc(n || "(blank)")}</li>`).join("");
+    const more = dry.count > dry.names.length ? `<li>…and ${dry.count - dry.names.length} more</li>` : "";
+    fields.innerHTML = `<p><strong>${dry.count}</strong> non-product row(s) found:</p><ul class="errs">${list}${more}</ul>`;
+    setSaveLabel(`Delete ${dry.count}`);
+    onSubmit = async () => {
+      fields.innerHTML = `<p class="muted">Removing…</p>`;
+      const r = await api.post("/api/catalog-items/cleanup", {});
+      fields.innerHTML = `<p><strong>Removed ${r.count}</strong> junk row(s). 🎉</p>`;
+      setSaveLabel("Done"); onSubmit = async () => {};
+      loadCompetitors(); refreshCounts();
+      return false;
+    };
+    return false;
+  });
+  document.getElementById("modal-fields").innerHTML = `<p class="muted">Scanning for banner/summary rows that aren't real products…</p>`;
+  setSaveLabel("Scan");
+});
+
 document.getElementById("coverage-brand").addEventListener("change", loadCoverage);
 
 // Classify unclassified items INTO the existing (competitor) taxonomy so
