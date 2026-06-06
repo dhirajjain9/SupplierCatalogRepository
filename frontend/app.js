@@ -51,6 +51,34 @@ async function runPool(items, worker, limit = 5, onDone) {
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
 }
 
+// POST/PUT JSON with a timeout and a few retries on transient failures (network
+// drop, timeout, 429 rate-limit, 5xx). Permanent 4xx errors fail fast. Used for
+// the AI calls that orchestrate long jobs (taxonomy classify/save) so one slow
+// or rate-limited batch can't hang or kill the whole run.
+async function postJsonRetry(url, body, { method = "POST", timeoutMs = 60000, tries = 4 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    let res;
+    try {
+      res = await fetchWithTimeout(url, {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }, timeoutMs);
+    } catch (e) {                       // aborted (timeout) or network error
+      lastErr = e;
+      if (attempt < tries - 1) await new Promise((r) => setTimeout(r, 800 * 2 ** attempt));
+      continue;
+    }
+    if (res.ok) return res.status === 204 ? null : await res.json().catch(() => ({}));
+    if (res.status < 500 && res.status !== 429) {   // permanent — don't retry
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Request failed (HTTP ${res.status})`);
+    }
+    lastErr = new Error(`HTTP ${res.status}`);       // transient — back off & retry
+    if (attempt < tries - 1) await new Promise((r) => setTimeout(r, 800 * 2 ** attempt));
+  }
+  throw lastErr || new Error("Request failed");
+}
+
 // Small in-memory caches so dropdowns/labels can resolve names by id.
 let suppliersCache = [];
 let itemsCache = [];
@@ -2125,34 +2153,52 @@ document.getElementById("curate-ai").addEventListener("click", () => {
   openModal("Curate categories", [], async () => {
     const fields = document.getElementById("modal-fields");
     await new Promise((r) => setTimeout(r, 0));  // let the modal paint first
-    const items = await api.get("/api/catalog-items");
-    if (!items.length) { fields.innerHTML = "<p>No products to classify.</p>"; onSubmit = async () => {}; return false; }
-    fields.innerHTML = `<p class="muted">Deriving a consolidated taxonomy from ${items.length} products…</p>`;
-    const uniq = (f) => [...new Set(items.map(f).filter(Boolean))];
-    const samples = uniq((i) => i.master_category).concat(uniq((i) => i.sub_category))
-      .concat(uniq((i) => i.category)).concat(items.slice(0, 400).map((i) => i.name));
-    const tax = await api.post("/api/taxonomy/suggest", { samples });
-    const batches = chunk(items, 40);
-    let done = 0;
-    for (const b of batches) {
-      fields.innerHTML = `<p class="muted">Re-classifying products into ${(tax.categories || []).length} categories… (${done}/${items.length})</p>`;
-      await new Promise((r) => setTimeout(r, 0));  // yield to keep UI responsive
-      const res = await api.post("/api/taxonomy/classify", {
-        taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.sub_category || i.category })),
-      });
-      if (res.items && res.items.length) await api.put("/api/taxonomy/save", { items: res.items });
-      done += b.length;
+    try {
+      const items = await api.get("/api/catalog-items");
+      if (!items.length) { fields.innerHTML = "<p>No products to classify.</p>"; setSaveLabel("Done"); onSubmit = async () => {}; return false; }
+      fields.innerHTML = `<p class="muted">Deriving a consolidated taxonomy from ${items.length} products…</p>`;
+      const uniq = (f) => [...new Set(items.map(f).filter(Boolean))];
+      const samples = uniq((i) => i.master_category).concat(uniq((i) => i.sub_category))
+        .concat(uniq((i) => i.category)).concat(items.slice(0, 400).map((i) => i.name));
+      const tax = await postJsonRetry("/api/taxonomy/suggest", { samples }, { timeoutMs: 90000 });
+      const ncat = (tax.categories || []).length;
+
+      // Classify in parallel (bounded), retrying transient failures per batch and
+      // saving each batch as it lands so progress is durable. A batch that still
+      // fails after retries is counted, not fatal — the run always finishes.
+      const batches = chunk(items, 40);
+      let done = 0, failed = 0;
+      await runPool(batches, async (b) => {
+        try {
+          const res = await postJsonRetry("/api/taxonomy/classify", {
+            taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.sub_category || i.category })),
+          });
+          if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
+        } catch (e) {
+          failed += b.length;
+        }
+        done += b.length;
+        fields.innerHTML = `<p class="muted">Re-classifying products into ${ncat} categories… (${done}/${items.length})</p>`;
+      }, 5);
+
+      fields.innerHTML = failed
+        ? `<p><strong>Curated ${items.length - failed} of ${items.length}</strong> products into ${ncat} categories.</p>`
+          + `<p class="errs">${failed} couldn't be classified this run (the AI was busy). Click Curate again to finish them.</p>`
+        : `<p><strong>Curated ${done} products</strong> into ${ncat} categories. 🎉</p>`;
+      setSaveLabel("Done"); onSubmit = async () => {};
+      loadCompetitors(); refreshCounts();
+    } catch (err) {
+      fields.innerHTML = info("Curation failed", err.message);
+      setSaveLabel("Close"); onSubmit = async () => {};
     }
-    fields.innerHTML = `<p><strong>Curated ${done} products</strong> into ${(tax.categories || []).length} categories. 🎉</p>`;
-    setSaveLabel("Done");
-    onSubmit = async () => {};
-    loadCompetitors(); refreshCounts();
     return false;
   });
   document.getElementById("modal-fields").innerHTML =
     `<p>Consolidate all product types into one set of categories and re-classify
        <strong>every</strong> product (competitors + suppliers) into it?</p>
-     <p class="muted">Takes a couple of minutes and uses AI credits.</p>`;
+     <p class="muted">Takes a couple of minutes and uses AI credits. You can leave
+       this open — it runs batches in parallel and always finishes (failed batches
+       are reported, not stuck).</p>`;
   setSaveLabel("Curate");
 });
 
@@ -2243,16 +2289,20 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
       tax = await api.post("/api/taxonomy/suggest", { samples });
     }
     const batches = chunk(todo, 40);
-    let done = 0;
-    for (const b of batches) {
-      body.innerHTML = `<p class="muted">Classifying products… (${done}/${todo.length})</p>`;
-      const res = await api.post("/api/taxonomy/classify", {
-        taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.category })),
-      });
-      if (res.items && res.items.length) await api.put("/api/taxonomy/save", { items: res.items });
+    let done = 0, failed = 0;
+    await runPool(batches, async (b) => {
+      try {
+        const res = await postJsonRetry("/api/taxonomy/classify", {
+          taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.category })),
+        });
+        if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
+      } catch (e) {
+        failed += b.length;
+      }
       done += b.length;
-    }
-    toast(`Classified ${done} products`);
+      body.innerHTML = `<p class="muted">Classifying products… (${done}/${todo.length})</p>`;
+    }, 5);
+    toast(failed ? `Classified ${todo.length - failed} of ${todo.length} (run again to finish)` : `Classified ${done} products`);
     loadCoverage();
   } catch (err) {
     body.innerHTML = info("Classification failed", err.message);
