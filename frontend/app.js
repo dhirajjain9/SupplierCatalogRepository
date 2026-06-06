@@ -765,26 +765,58 @@ function xlsxSheetGrid(xml, shared, sheetPath) {
   return { headers: grid[0] || [], rows: grid.slice(1) };
 }
 
-// Embedded images across the workbook, anchored by row.
+const _IMG_CT = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
+const _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+// Images in one drawing part, each tagged with the cell row it's anchored to.
+function _drawingImages(z, xml, dname) {
+  const out = [];
+  const dxml = xml(dname); if (!dxml) return out;
+  const drels = xml("xl/drawings/_rels/" + dname.split("/").pop() + ".rels"); const relTarget = {};
+  if (drels) drels.querySelectorAll("Relationship").forEach((r) => (relTarget[r.getAttribute("Id")] = r.getAttribute("Target")));
+  dxml.querySelectorAll("*").forEach((node) => {
+    if (node.localName !== "oneCellAnchor" && node.localName !== "twoCellAnchor") return;
+    const fromRow = node.querySelector("from row"); if (!fromRow) return;
+    const rn = parseInt(fromRow.textContent, 10) + 1;  // 0-based anchor → spreadsheet row
+    const blip = node.querySelector("blip"); if (!blip) return;
+    const embed = blip.getAttribute("r:embed") || blip.getAttributeNS(_REL_NS, "embed");
+    let target = relTarget[embed]; if (!target) return;
+    const path = ("xl/drawings/" + target).replace(/xl\/drawings\/\.\.\//, "xl/");
+    const bytes = z[path]; if (!bytes) return;
+    const ext = path.split(".").pop().toLowerCase();
+    out.push({ row: rn, bytes, type: _IMG_CT[ext] || "image/png" });
+  });
+  return out;
+}
+
+// All embedded images across the workbook (back-compat, single-sheet).
 function xlsxImages(z, xml) {
-  const images = []; const ctMap = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
-  for (const dname of Object.keys(z).filter((n) => /^xl\/drawings\/drawing\d+\.xml$/.test(n))) {
-    const dxml = xml(dname); const drels = xml("xl/drawings/_rels/" + dname.split("/").pop() + ".rels"); const relTarget = {};
-    if (drels) drels.querySelectorAll("Relationship").forEach((r) => (relTarget[r.getAttribute("Id")] = r.getAttribute("Target")));
-    dxml && dxml.querySelectorAll("*").forEach((node) => {
-      if (node.localName !== "oneCellAnchor" && node.localName !== "twoCellAnchor") return;
-      const fromRow = node.querySelector("from row"); if (!fromRow) return;
-      const rn = parseInt(fromRow.textContent, 10) + 1;
-      const blip = node.querySelector("blip"); if (!blip) return;
-      const embed = blip.getAttribute("r:embed") || blip.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed");
-      let target = relTarget[embed]; if (!target) return;
-      const path = ("xl/drawings/" + target).replace(/xl\/drawings\/\.\.\//, "xl/");
-      const bytes = z[path]; if (!bytes) return;
-      const ext = path.split(".").pop().toLowerCase();
-      images.push({ row: rn, bytes, type: ctMap[ext] || "image/png" });
-    });
-  }
-  return images;
+  let out = [];
+  Object.keys(z).filter((n) => /^xl\/drawings\/drawing\d+\.xml$/.test(n))
+    .forEach((d) => (out = out.concat(_drawingImages(z, xml, d))));
+  return out;
+}
+
+// Resolve a relationship Target (possibly "../foo/bar.xml") against a part path.
+function _resolveRel(fromPath, target) {
+  if (target.startsWith("/")) return target.replace(/^\//, "");
+  const dir = fromPath.split("/").slice(0, -1);
+  target.split("/").forEach((seg) => { if (seg === "..") dir.pop(); else if (seg !== ".") dir.push(seg); });
+  return dir.join("/");
+}
+
+// Images belonging to one worksheet (resolved via that sheet's drawing rel).
+function xlsxSheetImages(z, xml, sheetPath) {
+  const sheetXml = xml(sheetPath); if (!sheetXml) return [];
+  const drawingEl = sheetXml.querySelector("drawing"); if (!drawingEl) return [];
+  const rid = drawingEl.getAttribute("r:id") || drawingEl.getAttributeNS(_REL_NS, "id");
+  const base = sheetPath.split("/").pop();
+  const rels = xml(sheetPath.replace(/[^/]+$/, "_rels/" + base + ".rels"));
+  if (!rels) return [];
+  let target = null;
+  rels.querySelectorAll("Relationship").forEach((r) => { if (r.getAttribute("Id") === rid) target = r.getAttribute("Target"); });
+  if (!target) return [];
+  return _drawingImages(z, xml, _resolveRel(sheetPath, target));
 }
 
 // Back-compat: parse just the first worksheet (single-sheet files).
@@ -839,32 +871,80 @@ async function parseCatalogFile(file) {
   throw new Error("Unsupported file type. Please upload a .csv, .xlsx or .pdf file.");
 }
 
+// --- AI translation (Chinese → English) on import ----------------------- //
+let translateEnabled = false;
+fetch("/api/translate/config").then((r) => r.json()).then((c) => { translateEnabled = !!c.enabled; }).catch(() => {});
+const CJK_RE = /[㐀-鿿豈-﫿]/;  // CJK ideographs
+
+// If a parsed file contains Chinese text, translate it to English in place,
+// keeping the original product name in an "Original Name" attribute. Falls back
+// to the original text if translation is unavailable or fails.
+async function maybeTranslate(parsed) {
+  if (!translateEnabled || !parsed || !parsed.rows || !parsed.rows.length) return parsed;
+  const set = new Set();
+  const add = (v) => { if (typeof v === "string" && CJK_RE.test(v)) set.add(v); };
+  parsed.rows.forEach((r) => {
+    add(r.name); add(r.category); add(r.description); add(r.unit);
+    if (r.attributes) Object.entries(r.attributes).forEach(([k, v]) => { add(k); add(v); });
+  });
+  if (!set.size) return parsed;  // no Chinese → nothing to translate
+  const uniq = [...set]; const map = {}; const BATCH = 80;
+  for (let i = 0; i < uniq.length; i += BATCH) {
+    showModalBusy(`Translating to English… ${Math.min(i + BATCH, uniq.length)} / ${uniq.length}`);
+    const chunk = uniq.slice(i, i + BATCH);
+    try {
+      const res = await fetch("/api/translate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texts: chunk }) });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Translation failed"); }
+      const out = (await res.json()).translations || [];
+      chunk.forEach((orig, k) => { if (out[k]) map[orig] = out[k]; });
+    } catch (e) {
+      toast("Translation unavailable — importing original text. " + e.message, true);
+      return parsed;  // import originals rather than block the whole import
+    }
+  }
+  const tr = (v) => (typeof v === "string" && map[v]) ? map[v] : v;
+  parsed.rows.forEach((r) => {
+    const orig = r.name;
+    const na = {};
+    if (r.attributes) Object.entries(r.attributes).forEach(([k, v]) => { na[tr(k)] = tr(v); });
+    if (orig && map[orig]) { r.name = map[orig]; na["Original Name"] = orig; }  // keep the original (untranslated)
+    r.category = tr(r.category); r.description = tr(r.description); r.unit = tr(r.unit);
+    r.attributes = na;
+  });
+  return parsed;
+}
+
 // Like parseCatalogFile, but for a multi-tab .xlsx it first asks which tabs to
 // import (all selected by default), then concatenates them — every row tagged
 // with its "Source Tab". Used by every import path (upload / Chat / Drive).
 async function parseCatalogFileWithTabs(file) {
   if (!(file.name || "").toLowerCase().endsWith(".xlsx")) return parseCatalogFile(file);
   const ctx = await openXlsx(await readFileAs(file, "buf"));
-  if (ctx.sheets.length <= 1) {
-    const path = (ctx.sheets[0] && ctx.sheets[0].path) || "xl/worksheets/sheet1.xml";
-    const { headers, rows } = xlsxSheetGrid(ctx.xml, ctx.shared, path);
-    const r = normalizeRows(headers, rows); r.images = xlsxImages(ctx.z, ctx.xml); return r;
-  }
-  const chosen = await pickXlsxTabs(ctx.sheets);
-  return normalizeXlsxTabs(ctx, chosen);
+  // Single sheet → no picker; multi-tab → ask which tabs (all by default).
+  const chosen = ctx.sheets.length <= 1 ? ctx.sheets : await pickXlsxTabs(ctx.sheets);
+  return normalizeXlsxTabs(ctx, chosen.length ? chosen : ctx.sheets);
 }
 
-// Parse the chosen tabs and merge their rows, tagging each with its tab name.
+// Parse the chosen tabs, merge their rows (each tagged with its "Source Tab"),
+// and resolve every embedded image to its row's SKU/name so it attaches to the
+// right product — handled per sheet so multi-tab row numbers don't collide.
 function normalizeXlsxTabs(ctx, chosen) {
-  const rows = [], warnings = [];
+  const rows = [], warnings = [], images = [];
   chosen.forEach((s) => {
-    const { headers, rows: raw } = xlsxSheetGrid(ctx.xml, ctx.shared, s.path);
+    const path = s.path || "xl/worksheets/sheet1.xml";
+    const { headers, rows: raw } = xlsxSheetGrid(ctx.xml, ctx.shared, path);
     const r = normalizeRows(headers, raw);
-    r.rows.forEach((row) => { (row.attributes = row.attributes || {})["Source Tab"] = s.name; });
+    const byRow = {};
+    r.rows.forEach((row) => { (row.attributes = row.attributes || {})["Source Tab"] = s.name; byRow[row.source_row] = row; });
     rows.push(...r.rows);
     r.warnings.forEach((w) => warnings.push({ row: w.row, warning: `[${s.name}] ${w.warning}` }));
+    // Map each image (anchored at a spreadsheet row) to that row's product.
+    xlsxSheetImages(ctx.z, ctx.xml, path).forEach((img) => {
+      const row = byRow[img.row];
+      if (row && (row.sku || row.name)) images.push({ bytes: img.bytes, type: img.type, sku: row.sku || null, name: row.name || null });
+    });
   });
-  return { rows, warnings, images: xlsxImages(ctx.z, ctx.xml) };
+  return { rows, warnings, images };
 }
 
 // Render a tab checklist (with Select all) and resolve to the chosen sheets.
@@ -1202,11 +1282,14 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
         await runVisionFlow(file, supplier, renderSummary);
         return false;
       }
+      if (kind === "catalog") await maybeTranslate(parsed);
       const action = kind === "catalog" ? "catalog-import/rows" : "quotation-import/rows";
       summary = await importRowsBatched(action, supplier, parsed);
       if (kind === "catalog" && parsed.images && parsed.images.length) {
+        showModalBusy(`Saving ${parsed.images.length} product image(s)…`);
+        const sid = await resolveSupplierId(supplier.id, supplier.name);
         summary.images_attached = (summary.images_attached || 0)
-          + await attachEmbeddedImages(parsed, supplier.id);
+          + await attachEmbeddedImages(parsed, sid);
       }
     }
 
@@ -1229,14 +1312,14 @@ function showModalBusy(msg) {
 
 // Upload .xlsx-embedded images one at a time, named by their row's SKU.
 async function attachEmbeddedImages(parsed, supplierId) {
-  const skuByRow = {};
-  parsed.rows.forEach((r) => { if (r.sku) skuByRow[r.source_row] = r.sku; });
   let attached = 0;
-  for (const img of parsed.images) {
-    const sku = skuByRow[img.row];
-    if (!sku) continue;
+  for (const img of parsed.images || []) {
+    // Server matches images to items by SKU (filename stem); name is a fallback.
+    const key = img.sku || img.name;
+    if (!key) continue;
     const ext = (img.type.split("/")[1] || "png");
-    const res = await uploadOneImage(`${sku}.${ext}`, img.bytes, img.type, supplierId);
+    const safe = String(key).replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 80) || "img";
+    const res = await uploadOneImage(`${safe}.${ext}`, img.bytes, img.type, supplierId);
     attached += res.images_stored || 0;
   }
   return attached;
@@ -1618,10 +1701,13 @@ async function importChatFile(f, forceType) {
       await runVisionFlow(file, supplier, catalogSummaryHtml);  // takes over the modal
       return;
     }
+    await maybeTranslate(parsed);
     const summary = await importRowsBatched("catalog-import/rows", supplier, parsed);
     if (parsed.images && parsed.images.length) {
+      showModalBusy(`Saving ${parsed.images.length} product image(s)…`);
+      const sid = await resolveSupplierId(supplier.id, supplier.name);
       summary.images_attached = (summary.images_attached || 0)
-        + await attachEmbeddedImages(parsed, supplier.id);
+        + await attachEmbeddedImages(parsed, sid);
     }
     document.getElementById("modal-title").textContent = "Import Complete";
     document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(summary);
