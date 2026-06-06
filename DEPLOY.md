@@ -70,6 +70,23 @@ and the source pages stored as collateral. Each page is sent to the server one
 at a time, so file size isn't a constraint. Cost is roughly a few cents to a
 small fraction of a dollar per catalog depending on the model and page count.
 
+## Google Chat & Drive import (optional, owner only)
+Connect a Google account to import catalogs straight from Google Chat spaces or a
+Google Drive folder (e.g. the folder your WhatsApp catalogs get saved into).
+
+1. Create an OAuth client (Google Cloud Console → APIs & Services → Credentials →
+   OAuth client ID, type *Web application*). Add the redirect URI
+   `https://<your-domain>/api/google/callback`.
+2. In Vercel → **Settings → Environment Variables**, add:
+   - `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
+   - *(optional)* `GOOGLE_REDIRECT_URI` = `https://<your-domain>/api/google/callback`
+     (pins the redirect so per-deployment URLs don't cause `redirect_uri_mismatch`)
+   - *(optional)* `GOOGLE_DRIVE_FOLDER` = your catalog folder's share link or id —
+     **From Drive** then opens straight to that folder by default.
+3. **Redeploy**, then in the app use **📨 From Chat** / **📁 From Drive** →
+   *Connect Google* once, and import. CSV/Excel/text PDFs import directly;
+   image-only PDFs run through the browser AI vision flow.
+
 ## Locking it down later
 The link is currently open to anyone who has it. To add a single shared password
 (no per-user accounts), this can be done with a small middleware + a login screen —

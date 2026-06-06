@@ -123,7 +123,9 @@ def access_token(db: Session) -> str:
 def status(db: Session) -> dict:
     row = db.get(models.OAuthToken, PROVIDER)
     return {"configured": is_configured(), "connected": bool(row and row.refresh_token),
-            "email": row.email if row else None}
+            "email": row.email if row else None,
+            # Optional default Drive folder (id or share link) for catalog imports.
+            "drive_folder": folder_id_from_link(os.environ.get("GOOGLE_DRIVE_FOLDER"))}
 
 
 def list_spaces(db: Session) -> list[dict]:

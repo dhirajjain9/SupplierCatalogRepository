@@ -1426,7 +1426,8 @@ async function driveFlow(forceType) {
   catch (e) { fields.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
   fields.innerHTML = `
     <div class="field"><label>Drive folder</label>
-      <select id="drive-folder">${folders.map((f) => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join("")}</select></div>
+      <select id="drive-folder"><option value="">— Choose a folder —</option>${
+        folders.map((f) => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join("")}</select></div>
     <div class="field"><label>…or paste a folder link</label>
       <input id="drive-link" placeholder="https://drive.google.com/drive/folders/…" /></div>
     <div class="field"><label>New ${noun} name (optional)</label><input id="chat-supname" /></div>
@@ -1440,6 +1441,7 @@ async function driveFlow(forceType) {
     let files = [];
     try { files = await api.get(`/api/drive/files?folder=${encodeURIComponent(folder)}`); }
     catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+    try { localStorage.setItem("driveFolder", folder); } catch (e) {}  // remember last-used
     if (!files.length) { fc.innerHTML = `<p class="muted">No files in this folder.</p>`; return; }
     fc.innerHTML = `
       <div class="field"><label>File</label>
@@ -1453,7 +1455,15 @@ async function driveFlow(forceType) {
   let deb; document.getElementById("drive-link").addEventListener("input", () => {
     clearTimeout(deb); deb = setTimeout(loadFiles, 600);
   });
-  if (folders.length) loadFiles();
+
+  // Default to the server-configured folder, else the last one used on this browser.
+  let def = ""; try { def = st.drive_folder || localStorage.getItem("driveFolder") || ""; } catch (e) {}
+  if (def) {
+    const sel = document.getElementById("drive-folder");
+    if ([...sel.options].some((o) => o.value === def)) sel.value = def;
+    else document.getElementById("drive-link").value = def;
+    loadFiles();
+  }
 }
 
 // Pull a Chat attachment into the browser in byte-range slices, so files larger
