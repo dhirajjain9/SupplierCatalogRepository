@@ -252,6 +252,24 @@ td.right { white-space: nowrap; }
   padding: 16px 24px 22px; }
 .modal-foot .spacer { flex: 1; }
 
+/* Disabled buttons read as inactive everywhere. */
+.btn:disabled, .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* Busy modal: an operation is running. Hide the dismiss controls so the dialog
+   stays put, and turn the action button into a spinner so it's clearly working. */
+.modal-overlay.busy #modal-cancel,
+.modal-overlay.busy #modal-close { display: none; }
+.modal-overlay.busy #modal-form button[type="submit"] {
+  position: relative; color: transparent !important;
+}
+.modal-overlay.busy #modal-form button[type="submit"]::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45); border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 #modal-fields .errs { margin: 4px 0 0; padding: 12px 14px; list-style: none;
   background: var(--surface-2); border-radius: var(--radius-sm);
   color: var(--muted); font-size: 13px; max-height: 220px; overflow-y: auto; }

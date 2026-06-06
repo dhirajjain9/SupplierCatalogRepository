@@ -212,32 +212,41 @@ function openModal(title, fields, handler, extraFooterHtml = "") {
 }
 
 function closeModal() {
+  if (modalBusy) return;  // never dismiss while an operation is running
   document.getElementById("modal-overlay").classList.add("hidden");
   document.getElementById("modal-extra").innerHTML = "";
   setSaveLabel("Save");
   onSubmit = null;
 }
+
+// While an operation runs, lock the modal: grey the action button (with a
+// spinner), hide the Cancel/✕ affordances, and block Esc/backdrop/X dismissal —
+// so the dialog stays open and it's always clear that something is in progress.
+let modalBusy = false;
+function setModalBusy(on) {
+  modalBusy = on;
+  document.getElementById("modal-overlay").classList.toggle("busy", on);
+  const saveBtn = document.querySelector("#modal-form button[type=submit]");
+  if (saveBtn) saveBtn.disabled = on;
+}
+
 document.getElementById("modal-close").addEventListener("click", closeModal);
 document.getElementById("modal-cancel").addEventListener("click", closeModal);
-let modalSubmitting = false;
 document.getElementById("modal-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (modalSubmitting) return;  // ignore double-clicks / repeat submits
+  if (modalBusy) return;  // ignore double-clicks / repeat submits
   const form = e.target;
-  const saveBtn = form.querySelector('button[type=submit]');
   const values = {};
   new FormData(form).forEach((v, k) => (values[k] = v));
-  modalSubmitting = true;
-  if (saveBtn) saveBtn.disabled = true;
+  setModalBusy(true);
   try {
     // A handler may return false to keep the modal open (e.g. to show a summary).
     const keepOpen = await onSubmit(values, form);
+    setModalBusy(false);
     if (keepOpen !== false) closeModal();
   } catch (err) {
+    setModalBusy(false);  // unlock so the error is visible and dismissable
     toast(err.message, true);
-  } finally {
-    modalSubmitting = false;
-    if (saveBtn) saveBtn.disabled = false;
   }
 });
 
@@ -2267,46 +2276,63 @@ document.getElementById("coverage-brand").addEventListener("change", loadCoverag
 // Classify unclassified items INTO the existing (competitor) taxonomy so
 // supplier and competitor products share one vocabulary; fall back to deriving
 // a taxonomy only when nothing is classified yet.
-document.getElementById("classify-ai").addEventListener("click", async () => {
+document.getElementById("classify-ai").addEventListener("click", () => {
   if (!taxonomyEnabled) return toast("AI classification isn't enabled (set ANTHROPIC_API_KEY)", true);
-  const body = document.getElementById("coverage-body");
-  const items = await api.get("/api/catalog-items");
-  const todo = items.filter((i) => !i.master_category);
-  if (!todo.length) { toast("Everything is already classified"); return loadCoverage(); }
-  try {
-    // Prefer the taxonomy that already exists (from competitor imports).
-    const existing = items.filter((i) => i.master_category);
-    let tax;
-    if (existing.length) {
-      const tree = {};
-      existing.forEach((i) => { (tree[i.master_category] = tree[i.master_category] || new Set()).add(i.sub_category || "General"); });
-      tax = { categories: Object.entries(tree).map(([m, subs]) => ({ master: m, subs: [...subs] })) };
-      body.innerHTML = `<p class="muted">Aligning to the competitor taxonomy (${tax.categories.length} categories)…</p>`;
-    } else {
-      body.innerHTML = `<p class="muted">Deriving categories from ${items.length} products…</p>`;
-      const samples = [...new Set(items.map((i) => i.category).filter(Boolean))]
-        .concat(items.slice(0, 300).map((i) => i.name));
-      tax = await api.post("/api/taxonomy/suggest", { samples });
-    }
-    const batches = chunk(todo, 40);
-    let done = 0, failed = 0;
-    await runPool(batches, async (b) => {
-      try {
-        const res = await postJsonRetry("/api/taxonomy/classify", {
-          taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.category })),
-        });
-        if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
-      } catch (e) {
-        failed += b.length;
+  openModal("Classify with AI", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    await new Promise((r) => setTimeout(r, 0));  // let the modal paint first
+    try {
+      const items = await api.get("/api/catalog-items");
+      const todo = items.filter((i) => !i.master_category);
+      if (!todo.length) {
+        fields.innerHTML = "<p>Everything is already classified. 🎉</p>";
+        setSaveLabel("Done"); onSubmit = async () => {}; loadCoverage(); return false;
       }
-      done += b.length;
-      body.innerHTML = `<p class="muted">Classifying products… (${done}/${todo.length})</p>`;
-    }, 5);
-    toast(failed ? `Classified ${todo.length - failed} of ${todo.length} (run again to finish)` : `Classified ${done} products`);
-    loadCoverage();
-  } catch (err) {
-    body.innerHTML = info("Classification failed", err.message);
-  }
+      // Prefer the taxonomy that already exists (from competitor imports).
+      const existing = items.filter((i) => i.master_category);
+      let tax;
+      if (existing.length) {
+        const tree = {};
+        existing.forEach((i) => { (tree[i.master_category] = tree[i.master_category] || new Set()).add(i.sub_category || "General"); });
+        tax = { categories: Object.entries(tree).map(([m, subs]) => ({ master: m, subs: [...subs] })) };
+        fields.innerHTML = `<p class="muted">Aligning to the existing taxonomy (${tax.categories.length} categories)…</p>`;
+      } else {
+        fields.innerHTML = `<p class="muted">Deriving categories from ${items.length} products…</p>`;
+        const samples = [...new Set(items.map((i) => i.category).filter(Boolean))]
+          .concat(items.slice(0, 300).map((i) => i.name));
+        tax = await postJsonRetry("/api/taxonomy/suggest", { samples }, { timeoutMs: 90000 });
+      }
+      const batches = chunk(todo, 40);
+      let done = 0, failed = 0;
+      await runPool(batches, async (b) => {
+        try {
+          const res = await postJsonRetry("/api/taxonomy/classify", {
+            taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.category })),
+          });
+          if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
+        } catch (e) {
+          failed += b.length;
+        }
+        done += b.length;
+        fields.innerHTML = `<p class="muted">Classifying products… (${done}/${todo.length})</p>`;
+      }, 5);
+      fields.innerHTML = failed
+        ? `<p><strong>Classified ${todo.length - failed} of ${todo.length}</strong> products.</p>`
+          + `<p class="errs">${failed} couldn't be classified this run (the AI was busy). Click Classify again to finish them.</p>`
+        : `<p><strong>Classified ${done} products.</strong> 🎉</p>`;
+      setSaveLabel("Done"); onSubmit = async () => {};
+      loadCoverage();
+    } catch (err) {
+      fields.innerHTML = info("Classification failed", err.message);
+      setSaveLabel("Close"); onSubmit = async () => {};
+    }
+    return false;
+  });
+  document.getElementById("modal-fields").innerHTML =
+    `<p>Classify all unclassified products into the existing category taxonomy?</p>
+     <p class="muted">Runs batches in parallel and uses AI credits. The dialog stays
+       open while it works and always finishes.</p>`;
+  setSaveLabel("Classify");
 });
 
 // --------------------------------------------------------------------------- //
