@@ -219,7 +219,7 @@ class ImportSummary(BaseModel):
     items_updated: int
     quotes_created: int
     suppliers_created: int = 0  # suppliers auto-created from the file/form
-    images_attached: int = 0  # images embedded in an .xlsx that matched a row
+    images_attached: int = 0  # images matched to rows: embedded in an .xlsx or fetched from URL columns
     rows_with_warnings: int  # imported, but a value couldn't be typed
     item_ids: list[int | None] = []  # created/updated item id per input row (for photo linking)
     warnings: list[ImportWarning] = []

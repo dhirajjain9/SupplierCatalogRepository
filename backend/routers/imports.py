@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from backend import models, schemas
 from backend.database import get_db
-from backend.services import catalog_import, images
+from backend.services import catalog_import, google, image_urls, images
 from backend.services.storage import store_file
 
 router = APIRouter(prefix="/api", tags=["import"])
@@ -267,6 +267,69 @@ def _rows_to_parsed(rows: list[schemas.ImportRowIn]) -> list[catalog_import.Pars
     ]
 
 
+# Cap how many URL images one import will fetch, so a giant sheet can't run the
+# request past the serverless time limit. Failures are silent (missing photo).
+_URL_IMAGE_BUDGET = 200
+
+
+def _attach_image_urls(db: Session, row_to_item: dict[int, models.CatalogItem]) -> int:
+    """Download images referenced by URL in each row's image columns and attach
+    them. Items that already have an image are skipped so re-imports don't pile
+    up duplicates. Returns the number of images stored."""
+    # De-duplicate items (several rows can upsert the same item) and pair each
+    # with the image URLs found in its captured columns.
+    work: list[tuple[models.CatalogItem, list[str]]] = []
+    seen_items: set[int] = set()
+    for item in row_to_item.values():
+        if item.id in seen_items:
+            continue
+        seen_items.add(item.id)
+        urls = image_urls.collect(item.attributes or {})
+        if urls:
+            work.append((item, urls))
+    if not work:
+        return 0
+
+    # Skip items that already carry an image (idempotent re-import).
+    item_ids = [it.id for it, _ in work]
+    have_image = set(db.scalars(
+        select(models.Document.catalog_item_id)
+        .where(models.Document.catalog_item_id.in_(item_ids))
+        .where(models.Document.kind == "image")
+    ).all())
+
+    # A Drive fetcher bound to the connected Google account, if there is one.
+    drive_get = None
+    try:
+        google.access_token(db)  # raises if not connected/configured
+        drive_get = lambda fid: google.download_attachment(db, None, fid)  # noqa: E731
+    except Exception:
+        drive_get = None
+
+    stored = 0
+    budget = _URL_IMAGE_BUDGET
+    for item, urls in work:
+        if item.id in have_image:
+            continue
+        for n, url in enumerate(urls):
+            if budget <= 0:
+                return stored
+            budget -= 1
+            data = image_urls.fetch(url, drive_get)
+            if not data:
+                continue
+            jpeg = image_urls.to_jpeg(data)
+            blob, ctype = jpeg if jpeg else (data, "application/octet-stream")
+            if jpeg is None:
+                continue  # not a decodable image — don't store random bytes
+            db.add(store_file(
+                blob, f"item-{item.id}-{n + 1}.jpg", ctype,
+                supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
+            ))
+            stored += 1
+    return stored
+
+
 def _run_catalog_import(
     db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None,
     suppliers_pre_created: int = 0,
@@ -285,6 +348,7 @@ def _run_catalog_import(
                 supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
             ))
             summary.images_attached += 1
+    summary.images_attached += _attach_image_urls(db, row_to_item)
     db.commit()
     return summary
 
@@ -430,9 +494,10 @@ def import_catalog_rows(
         db, payload.supplier_id, payload.supplier_name, payload.type
     )
     warnings = [w.model_dump() for w in payload.warnings]
-    summary, _ = _persist_catalog(
+    summary, row_to_item = _persist_catalog(
         db, _rows_to_parsed(payload.rows), warnings, default, created, source_type=payload.type
     )
+    summary.images_attached += _attach_image_urls(db, row_to_item)
     db.commit()
     return summary
 
@@ -482,7 +547,8 @@ def import_sheet_mapped(payload: schemas.MappedSheetImport, db: Session = Depend
         parsed.append(row)
 
     default, created = _form_default_supplier(db, payload.supplier_id, payload.supplier_name, payload.type)
-    summary, _ = _persist_catalog(db, parsed, [], default, created, source_type=payload.type)
+    summary, row_to_item = _persist_catalog(db, parsed, [], default, created, source_type=payload.type)
+    summary.images_attached += _attach_image_urls(db, row_to_item)
     db.commit()
     return summary
 
@@ -495,9 +561,10 @@ def import_sheet(payload: schemas.SheetImport, db: Session = Depends(get_db)) ->
     default, created = _form_default_supplier(
         db, payload.supplier_id, payload.supplier_name, payload.type
     )
-    summary, _ = _persist_catalog(
+    summary, row_to_item = _persist_catalog(
         db, result.rows, result.warnings, default, created, source_type=payload.type
     )
+    summary.images_attached += _attach_image_urls(db, row_to_item)
     db.commit()
     return summary
 
