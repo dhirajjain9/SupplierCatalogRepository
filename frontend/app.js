@@ -1375,12 +1375,40 @@ function showModalBusy(msg) {
   document.getElementById("modal-extra").innerHTML = "";
 }
 
-// Upload .xlsx-embedded images one at a time, named by their row's SKU.
+// Downscale/compress an image (raw bytes) to a small JPEG before upload, so a
+// catalog full of full-resolution photos doesn't take forever to push and store.
+// Returns { blob, type } — falls back to the original bytes if decoding fails
+// (e.g. an exotic format the browser can't draw) or if it's already small.
+async function downscaleToJpeg(bytes, type, maxDim = 1280, quality = 0.82) {
+  const orig = { blob: new Blob([bytes], { type: type || "image/png" }), type: type || "image/png" };
+  if (typeof createImageBitmap !== "function") return orig;
+  let bmp;
+  try { bmp = await createImageBitmap(orig.blob); } catch { return orig; }
+  try {
+    const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+    // Tiny images that are already JPEG aren't worth re-encoding.
+    if (scale === 1 && bytes.length < 150 * 1024 && /jpe?g/.test(type || "")) return orig;
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(bmp.width * scale));
+    c.height = Math.max(1, Math.round(bmp.height * scale));
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise((res) => c.toBlob(res, "image/jpeg", quality));
+    // Keep whichever is smaller (re-encoding can occasionally grow a tiny PNG).
+    if (blob && blob.size < bytes.length) return { blob, type: "image/jpeg" };
+    return orig;
+  } catch {
+    return orig;
+  } finally {
+    bmp.close && bmp.close();
+  }
+}
+
 // Attach .xlsx-embedded images to the items they belong to. Each image carries
 // the SKU/name of its anchor row; we map that to the catalog-item id the import
 // just created/updated (item_ids is aligned to parsed.rows) and attach by id via
 // /api/documents. Matching by id — not by an SKU-encoded filename — means images
-// attach even for catalogs that have no SKU column (names only).
+// attach even for catalogs that have no SKU column (names only). Each photo is
+// downscaled to a small JPEG first so large catalogs upload quickly.
 async function attachEmbeddedImages(parsed, supplierId, itemIds) {
   const idBySku = {}, idByName = {};
   const norm = (v) => String(v).trim().toLowerCase();
@@ -1401,9 +1429,10 @@ async function attachEmbeddedImages(parsed, supplierId, itemIds) {
   }
   let attached = 0;
   await runPool(tasks, async ({ img, id }) => {
-    const ext = (img.type.split("/")[1] || "png");
+    const { blob, type } = await downscaleToJpeg(img.bytes, img.type);
+    const ext = (type.split("/")[1] || "jpg");
     const fd = new FormData();
-    fd.append("file", new File([img.bytes], `item-${id}.${ext}`, { type: img.type }));
+    fd.append("file", new File([blob], `item-${id}.${ext}`, { type }));
     fd.append("catalog_item_id", id);
     if (supplierId) fd.append("supplier_id", supplierId);
     try { const r = await fetchWithTimeout("/api/documents", { method: "POST", body: fd }); if (r.ok) attached++; }
@@ -1431,7 +1460,11 @@ async function runImageImport(file, supplierId) {
   }
   let stored = 0; const unmatched = [];
   await runPool(entries, async (e) => {
-    const res = await uploadOneImage(e.filename, e.bytes, e.type, supplierId);
+    // Downscale before upload, but keep the SKU filename stem (the server matches
+    // images to items by it) — only the extension changes when re-encoded to JPEG.
+    const { blob, type } = await downscaleToJpeg(e.bytes, e.type);
+    const fname = type === "image/jpeg" ? `${e.filename.replace(/\.[^.]+$/, "")}.jpg` : e.filename;
+    const res = await uploadOneImage(fname, blob, type, supplierId);
     stored += res.images_stored || 0;
     (res.images_unmatched || []).forEach((u) => unmatched.push(u));
   }, 5, (n) => showModalBusy(`Uploading images… (${n}/${entries.length})`));
