@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -165,6 +166,77 @@ def list_attachments(db: Session, space: str, limit: int = 60) -> list[dict]:
         if not page:
             break
     return files
+
+
+DRIVE_BASE = "https://www.googleapis.com/drive/v3"
+_FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+def folder_id_from_link(value: str | None) -> str | None:
+    """Accept a Drive folder share link or a bare folder id and return the id."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    m = re.search(r"/folders/([a-zA-Z0-9_-]+)", value)
+    if m:
+        return m.group(1)
+    m = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", value)
+    if m:
+        return m.group(1)
+    # Looks like a bare id already.
+    return value if re.fullmatch(r"[a-zA-Z0-9_-]{10,}", value) else None
+
+
+def list_drive_folders(db: Session, limit: int = 200) -> list[dict]:
+    """List the user's Drive folders (most-recently-modified first)."""
+    tok = access_token(db)
+    out, page = [], None
+    while len(out) < limit:
+        params = {
+            "q": f"mimeType='{_FOLDER_MIME}' and trashed=false",
+            "fields": "nextPageToken,files(id,name,modifiedTime)",
+            "pageSize": 100, "orderBy": "modifiedTime desc",
+            "spaces": "drive",
+        }
+        if page:
+            params["pageToken"] = page
+        url = f"{DRIVE_BASE}/files?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+        data = _get(url, tok)
+        for f in data.get("files", []):
+            out.append({"id": f.get("id"), "name": f.get("name") or "(untitled)"})
+        page = data.get("nextPageToken")
+        if not page:
+            break
+    return out
+
+
+def list_drive_files(db: Session, folder_id: str, limit: int = 300) -> list[dict]:
+    """List the (non-folder) files inside a Drive folder, newest first."""
+    tok = access_token(db)
+    out, page = [], None
+    while len(out) < limit:
+        params = {
+            "q": f"'{folder_id}' in parents and trashed=false",
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,size)",
+            "pageSize": 100, "orderBy": "modifiedTime desc",
+            "spaces": "drive",
+        }
+        if page:
+            params["pageToken"] = page
+        url = f"{DRIVE_BASE}/files?" + urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+        data = _get(url, tok)
+        for f in data.get("files", []):
+            if f.get("mimeType") == _FOLDER_MIME:
+                continue
+            out.append({
+                "driveFileId": f.get("id"), "filename": f.get("name") or "file",
+                "contentType": f.get("mimeType"), "time": f.get("modifiedTime"),
+                "resourceName": None,
+            })
+        page = data.get("nextPageToken")
+        if not page:
+            break
+    return out
 
 
 def _media_url(resource_name: str | None, drive_file_id: str | None) -> str:

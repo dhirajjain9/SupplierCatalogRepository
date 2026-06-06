@@ -1400,6 +1400,62 @@ async function chatFlow(forceType) {
   if (spaces.length) loadFiles(); else fields.querySelector("#chat-files").innerHTML = `<p class="muted">No Chat spaces found.</p>`;
 }
 
+// Import a catalog file straight from a Google Drive folder (e.g. the folder
+// your WhatsApp catalogs get saved into). Reuses the Chat download+import
+// pipeline — Drive files carry a driveFileId that /api/chat/download accepts.
+async function driveFlow(forceType) {
+  const st = await api.get("/api/google/status").catch(() => ({}));
+  if (!st.configured) {
+    return toast("Google isn't set up yet — add GOOGLE_CLIENT_ID/SECRET in Vercel.", true);
+  }
+  if (!st.connected) {
+    openModal("Connect Google", [], async () => { window.location.href = "/api/google/connect"; return false; });
+    document.getElementById("modal-fields").innerHTML =
+      `<p>Connect your Google account to import catalogs from Drive.</p>
+       <p class="muted">You'll be redirected to Google to authorize, then back here.</p>`;
+    setSaveLabel("Connect Google");
+    return;
+  }
+  const noun = forceType === "reference" ? "competitor" : "supplier";
+  openModal("Import from Google Drive", [], async () => true);  // Save just closes
+  const fields = document.getElementById("modal-fields");
+  fields.innerHTML = `<p class="muted">Loading your Drive folders…</p>`;
+  setSaveLabel("Close");
+  let folders = [];
+  try { folders = await api.get("/api/drive/folders"); }
+  catch (e) { fields.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+  fields.innerHTML = `
+    <div class="field"><label>Drive folder</label>
+      <select id="drive-folder">${folders.map((f) => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join("")}</select></div>
+    <div class="field"><label>…or paste a folder link</label>
+      <input id="drive-link" placeholder="https://drive.google.com/drive/folders/…" /></div>
+    <div class="field"><label>New ${noun} name (optional)</label><input id="chat-supname" /></div>
+    <div id="chat-files" class="muted">Pick a folder to load files…</div>`;
+  const loadFiles = async () => {
+    const link = (document.getElementById("drive-link").value || "").trim();
+    const folder = link || (document.getElementById("drive-folder").value || "");
+    const fc = document.getElementById("chat-files");
+    if (!folder) { fc.innerHTML = `<p class="muted">Select a folder, or paste a folder link above.</p>`; return; }
+    fc.innerHTML = "Loading files…";
+    let files = [];
+    try { files = await api.get(`/api/drive/files?folder=${encodeURIComponent(folder)}`); }
+    catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
+    if (!files.length) { fc.innerHTML = `<p class="muted">No files in this folder.</p>`; return; }
+    fc.innerHTML = `
+      <div class="field"><label>File</label>
+        <select id="chat-file">${files.map((f, i) =>
+          `<option value="${i}">${esc(f.filename || "file")}</option>`).join("")}</select></div>
+      <button class="btn primary" id="chat-import-btn">Import selected file</button>`;
+    fc.querySelector("#chat-import-btn").addEventListener("click", () =>
+      importChatFile(files[+document.getElementById("chat-file").value], forceType));
+  };
+  document.getElementById("drive-folder").addEventListener("change", loadFiles);
+  let deb; document.getElementById("drive-link").addEventListener("input", () => {
+    clearTimeout(deb); deb = setTimeout(loadFiles, 600);
+  });
+  if (folders.length) loadFiles();
+}
+
 // Pull a Chat attachment into the browser in byte-range slices, so files larger
 // than the serverless response limit still come through. Returns a File.
 const CHAT_CHUNK = 3 * 1024 * 1024;
@@ -1478,6 +1534,7 @@ document.querySelectorAll("[data-import]").forEach((b) => b.addEventListener("cl
   const kind = b.dataset.import, type = b.dataset.srctype;
   if (kind === "sheet") sheetFlow(type);
   else if (kind === "chat") chatFlow(type);
+  else if (kind === "drive") driveFlow(type);
   else importFlow(kind, type);
 }));
 

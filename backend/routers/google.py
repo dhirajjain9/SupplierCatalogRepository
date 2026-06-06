@@ -109,6 +109,29 @@ def chat_download(filename: str = "file", resourceName: str | None = None,
                              "Access-Control-Expose-Headers": "X-Total-Size"})
 
 
+@router.get("/drive/folders")
+def drive_folders(db: Session = Depends(get_db)) -> list[dict]:
+    try:
+        return google.list_drive_folders(db)
+    except google.NotConnected as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Drive API error: {exc}")
+
+
+@router.get("/drive/files")
+def drive_files(folder: str, db: Session = Depends(get_db)) -> list[dict]:
+    folder_id = google.folder_id_from_link(folder)
+    if not folder_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Couldn't read that folder link/id.")
+    try:
+        return google.list_drive_files(db, folder_id)
+    except google.NotConnected as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Drive API error: {exc}")
+
+
 class ChatImport(BaseModel):
     filename: str
     resourceName: str | None = None

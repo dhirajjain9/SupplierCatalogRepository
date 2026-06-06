@@ -41,6 +41,36 @@ def test_chat_download_requires_connection(client, monkeypatch):
     assert r.status_code == 401  # not connected yet
 
 
+def test_folder_id_from_link():
+    assert google.folder_id_from_link(
+        "https://drive.google.com/drive/folders/1A2b3C4d5E6f7G8h9I?usp=sharing"
+    ) == "1A2b3C4d5E6f7G8h9I"
+    assert google.folder_id_from_link("1A2b3C4d5E6f7G8h9I") == "1A2b3C4d5E6f7G8h9I"
+    assert google.folder_id_from_link("nope") is None
+    assert google.folder_id_from_link("") is None
+
+
+def test_drive_files_bad_link(client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sec")
+    r = client.get("/api/drive/files?folder=nope")
+    assert r.status_code == 400  # unparseable folder link/id
+
+
+def test_drive_files_requires_connection(client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sec")
+    r = client.get("/api/drive/files?folder=https://drive.google.com/drive/folders/abcdefghij1234")
+    assert r.status_code == 401  # parsed ok, but not connected
+
+
+def test_drive_folders_requires_connection(client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sec")
+    r = client.get("/api/drive/folders")
+    assert r.status_code == 401  # not connected yet
+
+
 class _FakeResp:
     def __init__(self, data, status, headers):
         self._data = data
