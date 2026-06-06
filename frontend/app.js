@@ -2354,19 +2354,33 @@ document.getElementById("coverage-brand").addEventListener("change", loadCoverag
 // Classify unclassified items INTO the existing (competitor) taxonomy so
 // supplier and competitor products share one vocabulary; fall back to deriving
 // a taxonomy only when nothing is classified yet.
-document.getElementById("classify-ai").addEventListener("click", () => {
+document.getElementById("classify-ai").addEventListener("click", async () => {
   if (!taxonomyEnabled) return toast("AI classification isn't enabled (set ANTHROPIC_API_KEY)", true);
+  // Which sources still have unclassified items — so the dropdown only offers
+  // targets that actually need work (no wasted effort on fully-classified ones).
+  const [sups, stats] = await Promise.all([api.get("/api/suppliers"), api.get("/api/catalog-items/stats")]);
+  const nameById = Object.fromEntries(sups.map((s) => [s.id, s.name]));
+  const typeById = Object.fromEntries(sups.map((s) => [s.id, s.type || "supplier"]));
+  const unclassBy = {};
+  stats.forEach((r) => { if (!r.master_category) unclassBy[r.supplier_id] = (unclassBy[r.supplier_id] || 0) + r.count; });
+  const remaining = Object.entries(unclassBy).map(([id, n]) => ({ id: +id, n }))
+    .filter((r) => r.n > 0).sort((a, b) => b.n - a.n);
+  const totalRemaining = remaining.reduce((s, r) => s + r.n, 0);
+
   openModal("Classify with AI", [], async () => {
     const fields = document.getElementById("modal-fields");
+    const scope = (fields.querySelector("#classify-scope") || {}).value || "all";
     await new Promise((r) => setTimeout(r, 0));  // let the modal paint first
     try {
       const items = await api.get("/api/catalog-items");
-      const todo = items.filter((i) => !i.master_category);
+      const inScope = scope === "all" ? items : items.filter((i) => i.supplier_id === +scope);
+      const todo = inScope.filter((i) => !i.master_category);
       if (!todo.length) {
-        fields.innerHTML = "<p>Everything is already classified. 🎉</p>";
+        fields.innerHTML = "<p>Nothing left to classify here. 🎉</p>";
         setSaveLabel("Done"); onSubmit = async () => {}; loadCoverage(); return false;
       }
-      // Prefer the taxonomy that already exists (from competitor imports).
+      // Align to the taxonomy already in use across the whole catalog (so every
+      // source shares one vocabulary); derive one only if nothing's classified yet.
       const existing = items.filter((i) => i.master_category);
       let tax;
       if (existing.length) {
@@ -2406,10 +2420,25 @@ document.getElementById("classify-ai").addEventListener("click", () => {
     }
     return false;
   });
-  document.getElementById("modal-fields").innerHTML =
-    `<p>Classify all unclassified products into the existing category taxonomy?</p>
-     <p class="muted">Runs batches in parallel and uses AI credits. The dialog stays
-       open while it works and always finishes.</p>`;
+
+  if (!remaining.length) {
+    document.getElementById("modal-fields").innerHTML = "<p>Everything is already classified. 🎉</p>";
+    setSaveLabel("Done"); onSubmit = async () => { loadCoverage(); };
+    return;
+  }
+  const opt = (r) => {
+    const tag = typeById[r.id] === "reference" ? " (competitor)" : "";
+    return `<option value="${r.id}">${esc(nameById[r.id] || ("#" + r.id))}${tag} — ${r.n} unclassified</option>`;
+  };
+  document.getElementById("modal-fields").innerHTML = `
+    <div class="field"><label>Classify</label>
+      <select id="classify-scope">
+        <option value="all">All sources with unclassified items (${totalRemaining})</option>
+        ${remaining.map(opt).join("")}
+      </select></div>
+    <p class="muted">Only sources that still have unclassified items are listed — pick one to
+       target it, or “All”. Items align to the existing taxonomy; it runs in parallel and uses
+       AI credits. The dialog stays open until it finishes.</p>`;
   setSaveLabel("Classify");
 });
 
