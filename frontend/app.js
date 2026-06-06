@@ -1115,7 +1115,15 @@ async function visionExtractPage(blob) {
   fd.append("file", new File([blob], "page.jpg", { type: "image/jpeg" }));
   let lastErr = "AI extraction failed";
   for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch("/api/vision/extract", { method: "POST", body: fd });
+    let res;
+    try {
+      res = await fetchWithTimeout("/api/vision/extract", { method: "POST", body: fd }, 60000);
+    } catch {
+      lastErr = "AI extraction timed out";
+      if (attempt === 3) break;
+      await new Promise((r) => setTimeout(r, 800 * Math.pow(2, attempt)));
+      continue;
+    }
     if (res.ok) return res.json();
     const e = await res.json().catch(() => ({}));
     lastErr = e.detail || `AI extraction failed (HTTP ${res.status})`;
@@ -1162,8 +1170,12 @@ async function uploadItemImage(itemId, filename, blob) {
   const fd = new FormData();
   fd.append("file", new File([blob], filename, { type: "image/jpeg" }));
   fd.append("catalog_item_id", itemId);
-  const r = await fetch("/api/documents", { method: "POST", body: fd });
-  return r.ok;
+  try {
+    const r = await fetchWithTimeout("/api/documents", { method: "POST", body: fd });
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 // Jump to the Catalog tab, filtered to a supplier, so the user sees their gallery.
@@ -1186,16 +1198,22 @@ async function runVisionFlow(file, supplier, renderSummary) {
   const pageBlobs = await renderPdfPages(file);
   const rows = []; const meta = []; let detected = null; let pagesWithProducts = 0;
   let erroredPages = 0; let lastError = null;
-  for (let i = 0; i < pageBlobs.length; i++) {
-    showModalBusy(`Reading page ${i + 1} of ${pageBlobs.length} with AI…`);
-    let res;
-    try { res = await visionExtractPage(pageBlobs[i]); }
-    catch (e) { res = { products: [] }; erroredPages++; lastError = e; }
+  // Read pages in parallel (bounded) — each page is its own AI call, so doing
+  // them concurrently turns an N-page wait into roughly N/5. Results are kept
+  // per page index so rows/meta stay in page order afterward.
+  const pageResults = new Array(pageBlobs.length);
+  showModalBusy(`Reading 0 of ${pageBlobs.length} pages with AI…`);
+  await runPool(pageBlobs, async (blob, i) => {
+    try { pageResults[i] = await visionExtractPage(blob); }
+    catch (e) { pageResults[i] = { products: [] }; erroredPages++; lastError = e; }
+  }, 5, (n) => showModalBusy(`Reading ${n} of ${pageBlobs.length} pages with AI…`));
+  pageResults.forEach((res, i) => {
+    if (!res) return;
     if (res.supplier_name && !detected) detected = res.supplier_name;
     const found = (res.products || []).filter((p) => p && p.name);
     found.forEach((p) => { rows.push(productToRow(p, i + 1)); meta.push({ pageIdx: i, box: p.box || null }); });
     if (found.length) pagesWithProducts++;
-  }
+  });
 
   const supplierName = supplier.name || detected || file.name.replace(/\.pdf$/i, "");
   if (!rows.length) {
@@ -1244,25 +1262,28 @@ async function runVisionFlow(file, supplier, renderSummary) {
     let step = 0, pageImgs = 0, crops = 0;
 
     // 1) Source page image per page (guaranteed fallback so every card has a photo).
-    for (const pk of pageIdxs) {
-      showModalBusy(`Saving page images… (${++step}/${total})`);
+    await runPool(pageIdxs, async (pk) => {
       const fd = new FormData();
       fd.append("file", new File([pageBlobs[pk]], `page-${pk + 1}.jpg`, { type: "image/jpeg" }));
       if (supId) fd.append("supplier_id", supId);
-      const r = await fetch("/api/documents", { method: "POST", body: fd });
-      if (r.ok) pageImgs++;
-    }
-    // 2) Tight per-product crops where the AI gave a box.
+      try { const r = await fetchWithTimeout("/api/documents", { method: "POST", body: fd }); if (r.ok) pageImgs++; }
+      catch { /* skip a stalled upload rather than freeze the import */ }
+    }, 5, () => showModalBusy(`Saving page images… (${++step}/${total})`));
+
+    // 2) Tight per-product crops where the AI gave a box. Decode each page's
+    // bitmap once, then crop + upload in parallel.
+    const cropTasks = []; const bitmaps = [];
     for (const pk of Object.keys(cropByPage)) {
       let bitmap;
       try { bitmap = await createImageBitmap(pageBlobs[pk]); } catch (e) { continue; }
-      for (const i of cropByPage[pk]) {
-        showModalBusy(`Cropping product photos… (${++step}/${total})`);
-        const blob = await cropToBlob(bitmap, meta[i].box);
-        if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) crops++;
-      }
-      bitmap.close && bitmap.close();
+      bitmaps.push(bitmap);
+      for (const i of cropByPage[pk]) cropTasks.push({ bitmap, i });
     }
+    await runPool(cropTasks, async ({ bitmap, i }) => {
+      const blob = await cropToBlob(bitmap, meta[i].box);
+      if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) crops++;
+    }, 5, () => showModalBusy(`Cropping product photos… (${++step}/${total})`));
+    bitmaps.forEach((b) => b.close && b.close());
     summary.images_attached = (summary.images_attached || 0) + pageImgs + crops;
 
     document.getElementById("modal-title").textContent = "Import Complete";
