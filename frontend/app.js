@@ -716,16 +716,38 @@ async function unzip(buf) {
   return out;
 }
 
-async function parseXLSX(buf) {
+// --- XLSX parsing (multi-tab aware) ------------------------------------- //
+async function openXlsx(buf) {
   const z = await unzip(buf), dec = new TextDecoder();
   const xml = (name) => z[name] ? new DOMParser().parseFromString(dec.decode(z[name]), "application/xml") : null;
   const shared = []; const ss = xml("xl/sharedStrings.xml");
   if (ss) ss.querySelectorAll("si").forEach((si) => shared.push(Array.from(si.querySelectorAll("t")).map((t) => t.textContent).join("")));
-  let sheetPath = "xl/worksheets/sheet1.xml";
+  return { z, xml, shared, sheets: xlsxSheetList(z, xml) };
+}
+
+// Ordered list of worksheet tabs: [{name, path}].
+function xlsxSheetList(z, xml) {
   const wb = xml("xl/workbook.xml"), wbRels = xml("xl/_rels/workbook.xml.rels");
-  if (wb && wbRels) { const first = wb.querySelector("sheets > sheet"); const rid = first && first.getAttribute("r:id");
-    if (rid) { const rel = Array.from(wbRels.querySelectorAll("Relationship")).find((r) => r.getAttribute("Id") === rid); if (rel) sheetPath = "xl/" + rel.getAttribute("Target").replace(/^\/?xl\//, ""); } }
-  if (!z[sheetPath]) { const k = Object.keys(z).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort(); if (k.length) sheetPath = k[0]; }
+  const rel = {};
+  if (wbRels) wbRels.querySelectorAll("Relationship").forEach((r) => (rel[r.getAttribute("Id")] = r.getAttribute("Target")));
+  const out = [];
+  if (wb) wb.querySelectorAll("sheets > sheet").forEach((s) => {
+    const name = s.getAttribute("name") || `Sheet ${out.length + 1}`;
+    const rid = s.getAttribute("r:id")
+      || s.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id");
+    const target = rid && rel[rid];
+    const path = target ? ("xl/" + target.replace(/^\/?xl\//, "")) : null;
+    if (path && z[path]) out.push({ name, path });
+  });
+  if (!out.length) {
+    Object.keys(z).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort()
+      .forEach((p, i) => out.push({ name: `Sheet ${i + 1}`, path: p }));
+  }
+  return out;
+}
+
+// Extract one worksheet into {headers, rows} (rows = arrays of cell strings).
+function xlsxSheetGrid(xml, shared, sheetPath) {
   const sheet = xml(sheetPath); let maxRow = 0; const cellMap = {};
   if (sheet) sheet.querySelectorAll("sheetData > row").forEach((r) => {
     r.querySelectorAll("c").forEach((c) => {
@@ -740,7 +762,11 @@ async function parseXLSX(buf) {
   });
   const grid = [];
   for (let rn = 1; rn <= maxRow; rn++) { const cm = cellMap[rn] || {}; const maxc = Math.max(-1, ...Object.keys(cm).map(Number)); const arr = []; for (let c = 0; c <= maxc; c++) arr.push(cm[c] !== undefined ? cm[c] : ""); grid.push(arr); }
-  const headers = grid[0] || [], rows = grid.slice(1);
+  return { headers: grid[0] || [], rows: grid.slice(1) };
+}
+
+// Embedded images across the workbook, anchored by row.
+function xlsxImages(z, xml) {
   const images = []; const ctMap = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
   for (const dname of Object.keys(z).filter((n) => /^xl\/drawings\/drawing\d+\.xml$/.test(n))) {
     const dxml = xml(dname); const drels = xml("xl/drawings/_rels/" + dname.split("/").pop() + ".rels"); const relTarget = {};
@@ -758,7 +784,15 @@ async function parseXLSX(buf) {
       images.push({ row: rn, bytes, type: ctMap[ext] || "image/png" });
     });
   }
-  return { headers, rows, images };
+  return images;
+}
+
+// Back-compat: parse just the first worksheet (single-sheet files).
+async function parseXLSX(buf) {
+  const ctx = await openXlsx(buf);
+  const first = (ctx.sheets[0] && ctx.sheets[0].path) || "xl/worksheets/sheet1.xml";
+  const { headers, rows } = xlsxSheetGrid(ctx.xml, ctx.shared, first);
+  return { headers, rows, images: xlsxImages(ctx.z, ctx.xml) };
 }
 
 let _pdfReady = null;
@@ -803,6 +837,65 @@ async function parseCatalogFile(file) {
   if (name.endsWith(".xlsx")) { const { headers, rows, images } = await parseXLSX(await readFileAs(file, "buf")); const r = normalizeRows(headers, rows); r.images = images; return r; }
   if (name.endsWith(".pdf")) { const { headers, rows } = await parsePDF(await readFileAs(file, "buf")); const r = normalizeRows(headers, rows); r.images = []; return r; }
   throw new Error("Unsupported file type. Please upload a .csv, .xlsx or .pdf file.");
+}
+
+// Like parseCatalogFile, but for a multi-tab .xlsx it first asks which tabs to
+// import (all selected by default), then concatenates them — every row tagged
+// with its "Source Tab". Used by every import path (upload / Chat / Drive).
+async function parseCatalogFileWithTabs(file) {
+  if (!(file.name || "").toLowerCase().endsWith(".xlsx")) return parseCatalogFile(file);
+  const ctx = await openXlsx(await readFileAs(file, "buf"));
+  if (ctx.sheets.length <= 1) {
+    const path = (ctx.sheets[0] && ctx.sheets[0].path) || "xl/worksheets/sheet1.xml";
+    const { headers, rows } = xlsxSheetGrid(ctx.xml, ctx.shared, path);
+    const r = normalizeRows(headers, rows); r.images = xlsxImages(ctx.z, ctx.xml); return r;
+  }
+  const chosen = await pickXlsxTabs(ctx.sheets);
+  return normalizeXlsxTabs(ctx, chosen);
+}
+
+// Parse the chosen tabs and merge their rows, tagging each with its tab name.
+function normalizeXlsxTabs(ctx, chosen) {
+  const rows = [], warnings = [];
+  chosen.forEach((s) => {
+    const { headers, rows: raw } = xlsxSheetGrid(ctx.xml, ctx.shared, s.path);
+    const r = normalizeRows(headers, raw);
+    r.rows.forEach((row) => { (row.attributes = row.attributes || {})["Source Tab"] = s.name; });
+    rows.push(...r.rows);
+    r.warnings.forEach((w) => warnings.push({ row: w.row, warning: `[${s.name}] ${w.warning}` }));
+  });
+  return { rows, warnings, images: xlsxImages(ctx.z, ctx.xml) };
+}
+
+// Render a tab checklist (with Select all) and resolve to the chosen sheets.
+function pickXlsxTabs(sheets) {
+  return new Promise((resolve) => {
+    document.getElementById("modal-title").textContent = "Choose worksheet tabs";
+    const fields = document.getElementById("modal-fields");
+    fields.innerHTML = `
+      <p class="muted">This Excel has ${sheets.length} tabs — pick which to import.</p>
+      <label style="display:block;margin:6px 0;font-weight:600">
+        <input type="checkbox" id="tab-all" checked> Select all</label>
+      <div id="tab-list" style="max-height:240px;overflow:auto;border-top:1px solid #eee;padding-top:6px">
+        ${sheets.map((s, i) => `<label style="display:block;margin:4px 0">
+          <input type="checkbox" class="tab-chk" data-i="${i}" checked> ${esc(s.name)}</label>`).join("")}</div>
+      <p id="tab-err" class="errs" style="display:none"></p>
+      <div style="margin-top:12px"><button class="btn primary" id="tab-go">Import selected tabs</button></div>`;
+    setSaveLabel("Close");
+    const all = fields.querySelector("#tab-all");
+    const chks = [...fields.querySelectorAll(".tab-chk")];
+    all.addEventListener("change", () => chks.forEach((c) => (c.checked = all.checked)));
+    chks.forEach((c) => c.addEventListener("change", () => (all.checked = chks.every((x) => x.checked))));
+    fields.querySelector("#tab-go").addEventListener("click", () => {
+      const chosen = chks.filter((c) => c.checked).map((c) => sheets[+c.dataset.i]);
+      if (!chosen.length) {
+        const e = fields.querySelector("#tab-err"); e.style.display = "block"; e.textContent = "Select at least one tab.";
+        return;
+      }
+      showModalBusy("Reading selected tabs…");
+      resolve(chosen);
+    });
+  });
 }
 
 const IMAGE_EXTS = [".jpg",".jpeg",".png",".gif",".webp",".bmp"];
@@ -1099,7 +1192,7 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
     if (kind === "images") {
       summary = await runImageImport(file, supplier.id);
     } else {
-      const parsed = await parseCatalogFile(file);
+      const parsed = await parseCatalogFileWithTabs(file);
       const isPdf = /\.pdf$/i.test(file.name);
       if (kind === "catalog" && isPdf && !parsed.rows.length) {
         if (!visionEnabled) {
@@ -1516,7 +1609,7 @@ async function importChatFile(f, forceType) {
 
   try {
     showModalBusy("Parsing file…");
-    const parsed = await parseCatalogFile(file);
+    const parsed = await parseCatalogFileWithTabs(file);
     if (/\.pdf$/i.test(filename) && !parsed.rows.length) {
       if (!visionEnabled) {
         throw new Error("This PDF is image-based and AI extraction isn't enabled "
