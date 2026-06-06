@@ -2181,6 +2181,41 @@ document.getElementById("cleanup-junk").addEventListener("click", () => {
   setSaveLabel("Scan");
 });
 
+// Clean up duplicate product photos (and surface duplicate suppliers) left by
+// repeated imports. Shows a report first, then removes only exact duplicates.
+document.getElementById("dedupe-images").addEventListener("click", () => {
+  openModal("Clean up duplicates", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    await new Promise((r) => setTimeout(r, 0));
+    const rep = await api.get("/api/maintenance/duplicates");
+    const imgN = rep.duplicate_images ? rep.duplicate_images.removable : 0;
+    const sups = rep.duplicate_suppliers || [];
+    const supList = sups.length
+      ? `<p><strong>${sups.length}</strong> duplicate supplier name(s) — review these manually:</p>`
+        + `<ul class="errs">${sups.map((s) => `<li>${esc(s.name)} ×${s.count}</li>`).join("")}</ul>`
+      : "";
+    if (!imgN) {
+      fields.innerHTML = `<p>No duplicate images found. 🎉</p>${supList}`;
+      setSaveLabel("Done"); onSubmit = async () => {};
+      return false;
+    }
+    fields.innerHTML = `<p><strong>${imgN}</strong> duplicate image(s) can be removed `
+      + `(one copy of each photo is kept).</p>${supList}`;
+    setSaveLabel(`Remove ${imgN}`);
+    onSubmit = async () => {
+      fields.innerHTML = `<p class="muted">Removing duplicates…</p>`;
+      const r = await api.post("/api/maintenance/dedupe-images", {});
+      fields.innerHTML = `<p><strong>Removed ${r.removed}</strong> duplicate image(s). 🎉</p>${supList}`;
+      setSaveLabel("Done"); onSubmit = async () => {};
+      loadCatalog(); refreshCounts();
+      return false;
+    };
+    return false;
+  });
+  document.getElementById("modal-fields").innerHTML = `<p class="muted">Scanning for duplicate images…</p>`;
+  setSaveLabel("Scan");
+});
+
 document.getElementById("coverage-brand").addEventListener("change", loadCoverage);
 
 // Classify unclassified items INTO the existing (competitor) taxonomy so
