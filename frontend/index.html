@@ -39,14 +39,20 @@
       <div class="panel-head">
         <h2>Suppliers</h2>
         <div class="actions">
-          <input type="search" id="supplier-search" placeholder="Search suppliers…" />
-          <button class="btn" id="merge-suppliers" title="Combine duplicate suppliers into one">⤵ Merge</button>
-          <button class="btn" data-import="catalog" data-srctype="supplier">⬆ Catalog</button>
-          <button class="btn" data-import="sheet" data-srctype="supplier">⬇ Google Sheet</button>
-          <button class="btn" data-import="chat" data-srctype="supplier">📨 From Chat</button>
-          <button class="btn" data-import="drive" data-srctype="supplier">📁 From Drive</button>
-          <button class="btn" data-import="quotation" data-srctype="supplier">⬆ Quotation</button>
-          <button class="btn" data-import="images" data-srctype="supplier">🖼 Images</button>
+          <input type="search" class="search" id="supplier-search" placeholder="Search suppliers…" />
+          <div class="dropdown">
+            <button type="button" class="btn" data-dd-toggle>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+              Import <span class="chev">▾</span></button>
+            <div class="dropdown-menu">
+              <button type="button" class="dd-item" data-import="catalog" data-srctype="supplier">📄 Catalog file <span class="dd-sub">CSV · Excel · PDF</span></button>
+              <button type="button" class="dd-item" data-import="sheet" data-srctype="supplier">📊 Google Sheet</button>
+              <button type="button" class="dd-item" data-import="chat" data-srctype="supplier">📨 From Chat</button>
+              <button type="button" class="dd-item" data-import="drive" data-srctype="supplier">📁 From Drive</button>
+              <button type="button" class="dd-item" data-import="quotation" data-srctype="supplier">💲 Quotation</button>
+              <button type="button" class="dd-item" data-import="images" data-srctype="supplier">🖼 Images</button>
+            </div>
+          </div>
           <button class="btn" data-merge data-srctype="supplier" title="Combine duplicate suppliers into one">🔀 Merge</button>
           <button class="btn primary" data-add-supplier data-srctype="supplier">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>

@@ -419,58 +419,25 @@ window.deleteSupplier = (ev, id, type) => withButton(ev, async () => {
 // move their items, photos and quotes to the target, then drop the emptied sources.
 async function mergeSourcesFlow(type) {
   const noun = SRC[type].noun;
-  const sups = await api.get(`/api/suppliers?type=${type}`);
+  const [sups, stats] = await Promise.all([
+    api.get(`/api/suppliers?type=${type}`), api.get("/api/catalog-items/stats"),
+  ]);
   if (sups.length < 2) return toast(`Need at least two ${noun}s to merge.`, true);
+  const countBy = {};
+  stats.forEach((r) => (countBy[r.supplier_id] = (countBy[r.supplier_id] || 0) + r.count));
   openModal(`Merge ${noun}s`, [], async () => {
     const fields = document.getElementById("modal-fields");
     const ids = [...fields.querySelectorAll(".merge-chk:checked")].map((c) => +c.dataset.id);
     const target = fields.querySelector("#merge-target").value.trim();
-    if (ids.length < 2) throw new Error(`Select at least two ${noun}s to merge.`);
-    if (!target) throw new Error("Enter the name to merge them into.");
-    const r = await api.post("/api/maintenance/merge-suppliers", { source_ids: ids, target_name: target });
-    toast(`Merged ${r.merged} into “${r.target_name}” — ${r.items_moved} item(s) moved`);
-    renderSourceCards(type);
-  });
-  const rows = sups.map((s) =>
-    `<label style="display:block;margin:5px 0"><input type="checkbox" class="merge-chk" data-id="${s.id}"> ${esc(s.name)}</label>`).join("");
-  document.getElementById("modal-fields").innerHTML = `
-    <div class="field"><label>Merge into (name)</label>
-      <input id="merge-target" placeholder="e.g. CIRCLE" /></div>
-    <p class="muted">Tick the ${noun}s to combine. Their items, photos and quotes move to the
-       target (created if the name is new); the emptied ${noun}s are deleted. Item de-duplication
-       isn't done here — run “De-dupe images” afterwards if needed.</p>
-    <div style="max-height:240px;overflow:auto;border-top:1px solid var(--border);padding-top:6px">${rows}</div>`;
-  setSaveLabel("Merge");
-}
-document.querySelectorAll("[data-merge]").forEach((b) =>
-  b.addEventListener("click", () => mergeSourcesFlow(b.dataset.srctype)));
-document.querySelectorAll("[data-add-supplier]").forEach((b) =>
-  b.addEventListener("click", () => addSource(b.dataset.srctype)));
-document.getElementById("supplier-search").addEventListener("input", debounce(loadSuppliers, 250));
-document.getElementById("competitor-search").addEventListener("input", debounce(loadCompetitors, 250));
-
-// Merge several suppliers into one: tick the sources, name the target, and their
-// items/photos/quotes move over before the duplicates are deleted.
-document.getElementById("merge-suppliers").addEventListener("click", async () => {
-  const [sups, stats] = await Promise.all([
-    api.get("/api/suppliers?type=supplier"), api.get("/api/catalog-items/stats"),
-  ]);
-  const countBy = {};
-  stats.forEach((r) => (countBy[r.supplier_id] = (countBy[r.supplier_id] || 0) + r.count));
-  if (sups.length < 2) return toast("Need at least two suppliers to merge.", true);
-  openModal("Merge suppliers", [], async () => {
-    const fields = document.getElementById("modal-fields");
-    const target = fields.querySelector("#merge-target").value.trim();
-    const ids = [...fields.querySelectorAll(".merge-chk:checked")].map((c) => +c.dataset.id);
     if (!target) throw new Error("Enter the name to merge into (e.g. CIRCLE).");
-    if (ids.length < 2) throw new Error("Tick at least two suppliers to merge.");
-    fields.innerHTML = `<p class="muted">Merging ${ids.length} suppliers into “${esc(target)}”…</p>`;
+    if (ids.length < 2) throw new Error(`Tick at least two ${noun}s to merge.`);
+    fields.innerHTML = `<p class="muted">Merging ${ids.length} ${noun}s into “${esc(target)}”…</p>`;
     const r = await api.post("/api/maintenance/merge-suppliers", { source_ids: ids, target_name: target });
-    fields.innerHTML = `<p><strong>Merged ${r.merged} suppliers</strong> into “${esc(r.target_name)}” `
+    fields.innerHTML = `<p><strong>Merged ${r.merged} ${noun}s</strong> into “${esc(r.target_name)}” `
       + `— ${r.items_moved} item(s) moved. 🎉</p>`
       + `<p class="muted">Tip: run 🖼 De-dupe images if the sources shared photos.</p>`;
     setSaveLabel("Done"); onSubmit = async () => {};
-    loadSuppliers(); refreshCounts();
+    renderSourceCards(type); refreshCounts();
     return false;
   });
   const rows = sups.map((s) => `<label class="merge-row" style="display:block;margin:4px 0">
@@ -479,18 +446,24 @@ document.getElementById("merge-suppliers").addEventListener("click", async () =>
   document.getElementById("modal-fields").innerHTML = `
     <div class="field"><label>Merge into (name)</label>
       <input id="merge-target" type="text" placeholder="e.g. CIRCLE" autocomplete="off" /></div>
-    <p class="muted">Tick the suppliers to combine. Their items, photos and quotes move to the
-       target name (created if it doesn't exist); the ticked sources are then removed.</p>
-    <input type="search" id="merge-search" placeholder="Filter suppliers…" style="margin-bottom:6px" />
+    <p class="muted">Tick the ${noun}s to combine. Their items, photos and quotes move to the target
+       name (created if it doesn't exist); the ticked sources are then removed.</p>
+    <input type="search" id="merge-search" placeholder="Filter ${noun}s…" style="margin-bottom:6px" />
     <div style="max-height:240px;overflow:auto;border-top:1px solid var(--border);padding-top:6px">${rows}</div>`;
   setSaveLabel("Merge");
   const fields = document.getElementById("modal-fields");
   fields.querySelector("#merge-search").addEventListener("input", (e) => {
     const term = e.target.value.toLowerCase();
-    fields.querySelectorAll(".merge-row").forEach((r) =>
-      (r.style.display = r.textContent.toLowerCase().includes(term) ? "" : "none"));
+    fields.querySelectorAll(".merge-row").forEach((row) =>
+      (row.style.display = row.textContent.toLowerCase().includes(term) ? "" : "none"));
   });
-});
+}
+document.querySelectorAll("[data-merge]").forEach((b) =>
+  b.addEventListener("click", () => mergeSourcesFlow(b.dataset.srctype)));
+document.querySelectorAll("[data-add-supplier]").forEach((b) =>
+  b.addEventListener("click", () => addSource(b.dataset.srctype)));
+document.getElementById("supplier-search").addEventListener("input", debounce(loadSuppliers, 250));
+document.getElementById("competitor-search").addEventListener("input", debounce(loadCompetitors, 250));
 
 // --------------------------------------------------------------------------- //
 // Catalog items
@@ -2518,6 +2491,18 @@ document.addEventListener("keydown", (e) => {
 });
 document.getElementById("modal-overlay").addEventListener("click", (e) => {
   if (e.target.id === "modal-overlay") closeModal();
+});
+
+// Dropdown menus (e.g. the Import menu): toggle on the trigger; any other click
+// closes open menus (selecting a .dd-item runs its own action, then closes here).
+document.addEventListener("click", (e) => {
+  const toggle = e.target.closest("[data-dd-toggle]");
+  const active = toggle ? toggle.closest(".dropdown") : null;
+  document.querySelectorAll(".dropdown.open").forEach((d) => { if (d !== active) d.classList.remove("open"); });
+  if (active) active.classList.toggle("open");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") document.querySelectorAll(".dropdown.open").forEach((d) => d.classList.remove("open"));
 });
 
 loadSuppliers();
