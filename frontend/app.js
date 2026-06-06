@@ -1354,7 +1354,7 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
         showModalBusy(`Saving ${parsed.images.length} product image(s)…`);
         const sid = await resolveSupplierId(supplier.id, supplier.name);
         summary.images_attached = (summary.images_attached || 0)
-          + await attachEmbeddedImages(parsed, sid);
+          + await attachEmbeddedImages(parsed, sid, summary.item_ids);
       }
     }
 
@@ -1376,18 +1376,39 @@ function showModalBusy(msg) {
 }
 
 // Upload .xlsx-embedded images one at a time, named by their row's SKU.
-async function attachEmbeddedImages(parsed, supplierId) {
-  // Only images that resolve to a SKU/name can be matched server-side.
-  const imgs = (parsed.images || []).filter((img) => img.sku || img.name);
+// Attach .xlsx-embedded images to the items they belong to. Each image carries
+// the SKU/name of its anchor row; we map that to the catalog-item id the import
+// just created/updated (item_ids is aligned to parsed.rows) and attach by id via
+// /api/documents. Matching by id — not by an SKU-encoded filename — means images
+// attach even for catalogs that have no SKU column (names only).
+async function attachEmbeddedImages(parsed, supplierId, itemIds) {
+  const idBySku = {}, idByName = {};
+  const norm = (v) => String(v).trim().toLowerCase();
+  (parsed.rows || []).forEach((r, i) => {
+    const id = itemIds && itemIds[i];
+    if (!id) return;
+    if (r.sku) idBySku[r.sku] = id;
+    if (r.name) idByName[norm(r.name)] = id;
+    // Chinese rows are translated before import, but the image kept the original
+    // name — key on that too so the match still lands.
+    const orig = r.attributes && r.attributes["Original Name"];
+    if (orig) idByName[norm(orig)] = id;
+  });
+  const tasks = [];
+  for (const img of parsed.images || []) {
+    const id = (img.sku && idBySku[img.sku]) || (img.name && idByName[norm(img.name)]);
+    if (id) tasks.push({ img, id });
+  }
   let attached = 0;
-  await runPool(imgs, async (img) => {
-    // Server matches images to items by SKU (filename stem); name is a fallback.
-    const key = img.sku || img.name;
+  await runPool(tasks, async ({ img, id }) => {
     const ext = (img.type.split("/")[1] || "png");
-    const safe = String(key).replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 80) || "img";
-    const res = await uploadOneImage(`${safe}.${ext}`, img.bytes, img.type, supplierId);
-    attached += res.images_stored || 0;
-  }, 5, (n) => showModalBusy(`Saving product image(s)… ${n} / ${imgs.length}`));
+    const fd = new FormData();
+    fd.append("file", new File([img.bytes], `item-${id}.${ext}`, { type: img.type }));
+    fd.append("catalog_item_id", id);
+    if (supplierId) fd.append("supplier_id", supplierId);
+    try { const r = await fetchWithTimeout("/api/documents", { method: "POST", body: fd }); if (r.ok) attached++; }
+    catch { /* skip a stalled upload rather than freeze the import */ }
+  }, 5, (n) => showModalBusy(`Saving product image(s)… ${n} / ${tasks.length}`));
   return attached;
 }
 
@@ -1772,7 +1793,7 @@ async function importChatFile(f, forceType) {
       showModalBusy(`Saving ${parsed.images.length} product image(s)…`);
       const sid = await resolveSupplierId(supplier.id, supplier.name);
       summary.images_attached = (summary.images_attached || 0)
-        + await attachEmbeddedImages(parsed, sid);
+        + await attachEmbeddedImages(parsed, sid, summary.item_ids);
     }
     document.getElementById("modal-title").textContent = "Import Complete";
     document.getElementById("modal-fields").innerHTML = catalogSummaryHtml(summary);
