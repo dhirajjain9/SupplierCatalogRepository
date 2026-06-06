@@ -415,6 +415,35 @@ window.deleteSupplier = (ev, id, type) => withButton(ev, async () => {
   renderSourceCards(type || "supplier");
 });
 
+// Combine several suppliers/competitors into one (e.g. 6 "Circle …" rows → CIRCLE):
+// move their items, photos and quotes to the target, then drop the emptied sources.
+async function mergeSourcesFlow(type) {
+  const noun = SRC[type].noun;
+  const sups = await api.get(`/api/suppliers?type=${type}`);
+  if (sups.length < 2) return toast(`Need at least two ${noun}s to merge.`, true);
+  openModal(`Merge ${noun}s`, [], async () => {
+    const fields = document.getElementById("modal-fields");
+    const ids = [...fields.querySelectorAll(".merge-chk:checked")].map((c) => +c.dataset.id);
+    const target = fields.querySelector("#merge-target").value.trim();
+    if (ids.length < 2) throw new Error(`Select at least two ${noun}s to merge.`);
+    if (!target) throw new Error("Enter the name to merge them into.");
+    const r = await api.post("/api/maintenance/merge-suppliers", { source_ids: ids, target_name: target });
+    toast(`Merged ${r.merged} into “${r.target_name}” — ${r.items_moved} item(s) moved`);
+    renderSourceCards(type);
+  });
+  const rows = sups.map((s) =>
+    `<label style="display:block;margin:5px 0"><input type="checkbox" class="merge-chk" data-id="${s.id}"> ${esc(s.name)}</label>`).join("");
+  document.getElementById("modal-fields").innerHTML = `
+    <div class="field"><label>Merge into (name)</label>
+      <input id="merge-target" placeholder="e.g. CIRCLE" /></div>
+    <p class="muted">Tick the ${noun}s to combine. Their items, photos and quotes move to the
+       target (created if the name is new); the emptied ${noun}s are deleted. Item de-duplication
+       isn't done here — run “De-dupe images” afterwards if needed.</p>
+    <div style="max-height:240px;overflow:auto;border-top:1px solid var(--border);padding-top:6px">${rows}</div>`;
+  setSaveLabel("Merge");
+}
+document.querySelectorAll("[data-merge]").forEach((b) =>
+  b.addEventListener("click", () => mergeSourcesFlow(b.dataset.srctype)));
 document.querySelectorAll("[data-add-supplier]").forEach((b) =>
   b.addEventListener("click", () => addSource(b.dataset.srctype)));
 document.getElementById("supplier-search").addEventListener("input", debounce(loadSuppliers, 250));
@@ -2235,14 +2264,24 @@ function info(title, sub) {
 // Re-derive ONE consolidated taxonomy across ALL products and re-classify
 // everything into it. Uses the app modal (not a blocking confirm()) so the
 // click stays responsive, and shows progress.
-document.getElementById("curate-ai").addEventListener("click", () => {
+document.getElementById("curate-ai").addEventListener("click", async () => {
   if (!taxonomyEnabled) return toast("AI isn't enabled (set ANTHROPIC_API_KEY)", true);
+  const [sups, stats] = await Promise.all([api.get("/api/suppliers"), api.get("/api/catalog-items/stats")]);
+  const nameById = Object.fromEntries(sups.map((s) => [s.id, s.name]));
+  const typeById = Object.fromEntries(sups.map((s) => [s.id, s.type || "supplier"]));
+  const totalBy = {}; let grand = 0, unclassified = 0;
+  stats.forEach((r) => { totalBy[r.supplier_id] = (totalBy[r.supplier_id] || 0) + r.count; grand += r.count; if (!r.master_category) unclassified += r.count; });
+  const sources = Object.entries(totalBy).map(([id, n]) => ({ id: +id, n })).sort((a, b) => b.n - a.n);
+
   openModal("Curate categories", [], async () => {
     const fields = document.getElementById("modal-fields");
+    const scope = (fields.querySelector("#curate-scope") || {}).value || "all";
     await new Promise((r) => setTimeout(r, 0));  // let the modal paint first
     try {
       const items = await api.get("/api/catalog-items");
       if (!items.length) { fields.innerHTML = "<p>No products to classify.</p>"; setSaveLabel("Done"); onSubmit = async () => {}; return false; }
+      // Always rebuild ONE consolidated taxonomy from the whole catalog so the
+      // vocabulary stays global; only the re-file step below is scoped.
       fields.innerHTML = `<p class="muted">Deriving a consolidated taxonomy from ${items.length} products…</p>`;
       const uniq = (f) => [...new Set(items.map(f).filter(Boolean))];
       const samples = uniq((i) => i.master_category).concat(uniq((i) => i.sub_category))
@@ -2250,10 +2289,19 @@ document.getElementById("curate-ai").addEventListener("click", () => {
       const tax = await postJsonRetry("/api/taxonomy/suggest", { samples }, { timeoutMs: 90000 });
       const ncat = (tax.categories || []).length;
 
+      // What to (re-)file into the new taxonomy — scoped to save effort.
+      const todo = scope === "all" ? items
+        : scope === "unclassified" ? items.filter((i) => !i.master_category)
+          : items.filter((i) => i.supplier_id === +scope);
+      if (!todo.length) {
+        fields.innerHTML = "<p>Nothing to re-file for that selection. 🎉</p>";
+        setSaveLabel("Done"); onSubmit = async () => {}; loadCompetitors(); return false;
+      }
+
       // Classify in parallel (bounded), retrying transient failures per batch and
       // saving each batch as it lands so progress is durable. A batch that still
       // fails after retries is counted, not fatal — the run always finishes.
-      const batches = chunk(items, 40);
+      const batches = chunk(todo, 40);
       let done = 0, failed = 0;
       await runPool(batches, async (b) => {
         try {
@@ -2265,11 +2313,11 @@ document.getElementById("curate-ai").addEventListener("click", () => {
           failed += b.length;
         }
         done += b.length;
-        fields.innerHTML = `<p class="muted">Re-classifying products into ${ncat} categories… (${done}/${items.length})</p>`;
+        fields.innerHTML = `<p class="muted">Filing products into ${ncat} categories… (${done}/${todo.length})</p>`;
       }, 5);
 
       fields.innerHTML = failed
-        ? `<p><strong>Curated ${items.length - failed} of ${items.length}</strong> products into ${ncat} categories.</p>`
+        ? `<p><strong>Curated ${todo.length - failed} of ${todo.length}</strong> products into ${ncat} categories.</p>`
           + `<p class="errs">${failed} couldn't be classified this run (the AI was busy). Click Curate again to finish them.</p>`
         : `<p><strong>Curated ${done} products</strong> into ${ncat} categories. 🎉</p>`;
       setSaveLabel("Done"); onSubmit = async () => {};
@@ -2280,12 +2328,21 @@ document.getElementById("curate-ai").addEventListener("click", () => {
     }
     return false;
   });
-  document.getElementById("modal-fields").innerHTML =
-    `<p>Consolidate all product types into one set of categories and re-classify
-       <strong>every</strong> product (competitors + suppliers) into it?</p>
-     <p class="muted">Takes a couple of minutes and uses AI credits. You can leave
-       this open — it runs batches in parallel and always finishes (failed batches
-       are reported, not stuck).</p>`;
+
+  const opt = (s) => {
+    const tag = typeById[s.id] === "reference" ? " (competitor)" : "";
+    return `<option value="${s.id}">${esc(nameById[s.id] || ("#" + s.id))}${tag} — ${s.n} items</option>`;
+  };
+  document.getElementById("modal-fields").innerHTML = `
+    <div class="field"><label>Re-file</label>
+      <select id="curate-scope">
+        <option value="all">All products — re-file everything (${grand})</option>
+        ${unclassified ? `<option value="unclassified">Only unclassified items (${unclassified})</option>` : ""}
+        ${sources.map(opt).join("")}
+      </select></div>
+    <p class="muted">Curate always rebuilds one consolidated taxonomy from the whole catalog. Choose
+       what to re-file into it: everything, only the unclassified items, or a single source — so you
+       don't re-spend AI credits on products that are already filed. Runs in parallel and always finishes.</p>`;
   setSaveLabel("Curate");
 });
 
