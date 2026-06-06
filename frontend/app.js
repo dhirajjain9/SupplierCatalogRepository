@@ -24,6 +24,33 @@ const api = {
   del: (u) => api.request("DELETE", u),
 };
 
+// fetch with a hard timeout so a stalled serverless call can't freeze an import
+// indefinitely — it aborts and the caller falls back / retries instead.
+async function fetchWithTimeout(url, opts = {}, ms = 45000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Run an async worker over items with bounded concurrency (default 5). Keeps
+// long batches of network calls fast without firing hundreds at once. The
+// optional onDone(completedCount) fires after each item for progress display.
+async function runPool(items, worker, limit = 5, onDone) {
+  let i = 0, done = 0;
+  const next = async () => {
+    while (i < items.length) {
+      const idx = i++;
+      await worker(items[idx], idx);
+      if (onDone) onDone(++done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next));
+}
+
 // Small in-memory caches so dropdowns/labels can resolve names by id.
 let suppliersCache = [];
 let itemsCache = [];
@@ -888,20 +915,33 @@ async function maybeTranslate(parsed) {
     if (r.attributes) Object.entries(r.attributes).forEach(([k, v]) => { add(k); add(v); });
   });
   if (!set.size) return parsed;  // no Chinese → nothing to translate
-  const uniq = [...set]; const map = {}; const BATCH = 80;
-  for (let i = 0; i < uniq.length; i += BATCH) {
-    showModalBusy(`Translating to English… ${Math.min(i + BATCH, uniq.length)} / ${uniq.length}`);
-    const chunk = uniq.slice(i, i + BATCH);
+  const uniq = [...set]; const map = {}; const BATCH = 60;
+  const chunks = chunk(uniq, BATCH);
+  let translated = 0; let lastErr = null;
+  showModalBusy(`Translating to English… 0 / ${uniq.length}`);
+  // Translate chunks in parallel (bounded) with a per-request timeout. A failed
+  // or slow chunk is skipped (its strings stay in the original language) rather
+  // than blocking the whole import or freezing on a stalled request.
+  await runPool(chunks, async (texts) => {
     try {
-      const res = await fetch("/api/translate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texts: chunk }) });
+      const res = await fetchWithTimeout("/api/translate", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texts }),
+      });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Translation failed"); }
       const out = (await res.json()).translations || [];
-      chunk.forEach((orig, k) => { if (out[k]) map[orig] = out[k]; });
+      texts.forEach((orig, k) => { if (out[k]) map[orig] = out[k]; });
     } catch (e) {
-      toast("Translation unavailable — importing original text. " + e.message, true);
-      return parsed;  // import originals rather than block the whole import
+      lastErr = e;
     }
+  }, 5, (n) => {
+    translated = Math.min(uniq.length, n * BATCH);
+    showModalBusy(`Translating to English… ${translated} / ${uniq.length}`);
+  });
+  if (lastErr && !Object.keys(map).length) {
+    toast("Translation unavailable — importing original text. " + lastErr.message, true);
+    return parsed;  // nothing translated → import originals
   }
+  if (lastErr) toast("Some text couldn't be translated — imported as-is.", true);
   const tr = (v) => (typeof v === "string" && map[v]) ? map[v] : v;
   parsed.rows.forEach((r) => {
     const orig = r.name;
@@ -1032,9 +1072,13 @@ async function uploadOneImage(filename, bytes, type, supplierId) {
   const fd = new FormData();
   fd.append("file", new File([bytes], filename, { type }));
   if (supplierId) fd.append("supplier_id", supplierId);
-  const res = await fetch("/api/images-import", { method: "POST", body: fd });
-  if (!res.ok) return { images_stored: 0, images_unmatched: [filename], files_skipped: [] };
-  return res.json();
+  try {
+    const res = await fetchWithTimeout("/api/images-import", { method: "POST", body: fd });
+    if (!res.ok) return { images_stored: 0, images_unmatched: [filename], files_skipped: [] };
+    return res.json();
+  } catch {
+    return { images_stored: 0, images_unmatched: [filename], files_skipped: [] };
+  }
 }
 
 // --------------------------------------------------------------------------- //
@@ -1312,16 +1356,17 @@ function showModalBusy(msg) {
 
 // Upload .xlsx-embedded images one at a time, named by their row's SKU.
 async function attachEmbeddedImages(parsed, supplierId) {
+  // Only images that resolve to a SKU/name can be matched server-side.
+  const imgs = (parsed.images || []).filter((img) => img.sku || img.name);
   let attached = 0;
-  for (const img of parsed.images || []) {
+  await runPool(imgs, async (img) => {
     // Server matches images to items by SKU (filename stem); name is a fallback.
     const key = img.sku || img.name;
-    if (!key) continue;
     const ext = (img.type.split("/")[1] || "png");
     const safe = String(key).replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 80) || "img";
     const res = await uploadOneImage(`${safe}.${ext}`, img.bytes, img.type, supplierId);
     attached += res.images_stored || 0;
-  }
+  }, 5, (n) => showModalBusy(`Saving product image(s)… ${n} / ${imgs.length}`));
   return attached;
 }
 
@@ -1343,12 +1388,11 @@ async function runImageImport(file, supplierId) {
     throw new Error("Upload a .zip of images or a single image file (.jpg/.png/…).");
   }
   let stored = 0; const unmatched = [];
-  for (const e of entries) {
-    showModalBusy(`Uploading images… (${stored + unmatched.length + 1}/${entries.length})`);
+  await runPool(entries, async (e) => {
     const res = await uploadOneImage(e.filename, e.bytes, e.type, supplierId);
     stored += res.images_stored || 0;
     (res.images_unmatched || []).forEach((u) => unmatched.push(u));
-  }
+  }, 5, (n) => showModalBusy(`Uploading images… (${n}/${entries.length})`));
   return { images_stored: stored, images_unmatched: unmatched, files_skipped: skipped };
 }
 
