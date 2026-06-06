@@ -420,6 +420,49 @@ document.querySelectorAll("[data-add-supplier]").forEach((b) =>
 document.getElementById("supplier-search").addEventListener("input", debounce(loadSuppliers, 250));
 document.getElementById("competitor-search").addEventListener("input", debounce(loadCompetitors, 250));
 
+// Merge several suppliers into one: tick the sources, name the target, and their
+// items/photos/quotes move over before the duplicates are deleted.
+document.getElementById("merge-suppliers").addEventListener("click", async () => {
+  const [sups, stats] = await Promise.all([
+    api.get("/api/suppliers?type=supplier"), api.get("/api/catalog-items/stats"),
+  ]);
+  const countBy = {};
+  stats.forEach((r) => (countBy[r.supplier_id] = (countBy[r.supplier_id] || 0) + r.count));
+  if (sups.length < 2) return toast("Need at least two suppliers to merge.", true);
+  openModal("Merge suppliers", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    const target = fields.querySelector("#merge-target").value.trim();
+    const ids = [...fields.querySelectorAll(".merge-chk:checked")].map((c) => +c.dataset.id);
+    if (!target) throw new Error("Enter the name to merge into (e.g. CIRCLE).");
+    if (ids.length < 2) throw new Error("Tick at least two suppliers to merge.");
+    fields.innerHTML = `<p class="muted">Merging ${ids.length} suppliers into “${esc(target)}”…</p>`;
+    const r = await api.post("/api/maintenance/merge-suppliers", { source_ids: ids, target_name: target });
+    fields.innerHTML = `<p><strong>Merged ${r.merged} suppliers</strong> into “${esc(r.target_name)}” `
+      + `— ${r.items_moved} item(s) moved. 🎉</p>`
+      + `<p class="muted">Tip: run 🖼 De-dupe images if the sources shared photos.</p>`;
+    setSaveLabel("Done"); onSubmit = async () => {};
+    loadSuppliers(); refreshCounts();
+    return false;
+  });
+  const rows = sups.map((s) => `<label class="merge-row" style="display:block;margin:4px 0">
+      <input type="checkbox" class="merge-chk" data-id="${s.id}"> ${esc(s.name)}
+      <span class="muted">· ${countBy[s.id] || 0} items</span></label>`).join("");
+  document.getElementById("modal-fields").innerHTML = `
+    <div class="field"><label>Merge into (name)</label>
+      <input id="merge-target" type="text" placeholder="e.g. CIRCLE" autocomplete="off" /></div>
+    <p class="muted">Tick the suppliers to combine. Their items, photos and quotes move to the
+       target name (created if it doesn't exist); the ticked sources are then removed.</p>
+    <input type="search" id="merge-search" placeholder="Filter suppliers…" style="margin-bottom:6px" />
+    <div style="max-height:240px;overflow:auto;border-top:1px solid var(--border);padding-top:6px">${rows}</div>`;
+  setSaveLabel("Merge");
+  const fields = document.getElementById("modal-fields");
+  fields.querySelector("#merge-search").addEventListener("input", (e) => {
+    const term = e.target.value.toLowerCase();
+    fields.querySelectorAll(".merge-row").forEach((r) =>
+      (r.style.display = r.textContent.toLowerCase().includes(term) ? "" : "none"));
+  });
+});
+
 // --------------------------------------------------------------------------- //
 // Catalog items
 // --------------------------------------------------------------------------- //
