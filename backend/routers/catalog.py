@@ -27,6 +27,9 @@ def _ensure_supplier(db: Session, supplier_id: int) -> None:
 def list_items(
     db: Session = Depends(get_db),
     supplier_id: int | None = Query(default=None),
+    source_type: str | None = Query(
+        default=None, description="Limit to items whose supplier is of this type: 'supplier' or 'reference'"
+    ),
     category: str | None = Query(default=None, description="Filter by product type/category"),
     master_category: str | None = Query(default=None),
     sub_category: str | None = Query(default=None),
@@ -37,6 +40,12 @@ def list_items(
     stmt = select(models.CatalogItem).order_by(models.CatalogItem.name)
     if supplier_id is not None:
         stmt = stmt.where(models.CatalogItem.supplier_id == supplier_id)
+    if source_type in ("supplier", "reference"):
+        stmt = stmt.where(
+            models.CatalogItem.supplier_id.in_(
+                select(models.Supplier.id).where(models.Supplier.type == source_type)
+            )
+        )
     if category:
         stmt = stmt.where(models.CatalogItem.category == category)
     if master_category:

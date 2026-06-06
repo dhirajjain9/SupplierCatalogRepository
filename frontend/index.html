@@ -51,13 +51,7 @@
             Add Supplier</button>
         </div>
       </div>
-      <div class="table-wrap"><table id="suppliers-table">
-        <thead><tr>
-          <th>Name</th><th>Contact</th><th>Email</th><th>Phone</th>
-          <th>Category</th><th class="right">Actions</th>
-        </tr></thead>
-        <tbody></tbody>
-      </table></div>
+      <div id="suppliers-body"></div>
     </section>
 
     <!-- Competitors (reference brands) -->
@@ -94,15 +88,23 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
           </div>
           <input type="search" id="catalog-search" placeholder="Search name, SKU, description…" />
-          <select id="catalog-supplier-filter"><option value="">All sources</option></select>
-          <select id="catalog-master-filter"><option value="">All master categories</option></select>
-          <select id="catalog-sub-filter"><option value="">All sub-categories</option></select>
           <button class="btn" id="cleanup-junk" title="Remove banner/summary rows that aren't real products">🧹 Remove junk</button>
           <button class="btn" id="dedupe-images" title="Remove duplicate product photos left by repeated imports">🖼 De-dupe images</button>
           <button class="btn primary" id="add-item">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Add Item</button>
         </div>
+      </div>
+      <div class="filter-bar">
+        <label class="filt"><span>Supplier</span>
+          <select id="catalog-supplier-filter"><option value="all">All suppliers</option></select></label>
+        <label class="filt"><span>Competitor</span>
+          <select id="catalog-competitor-filter"><option value="none">None</option></select></label>
+        <label class="filt"><span>Master category</span>
+          <select id="catalog-master-filter"><option value="">All master categories</option></select></label>
+        <label class="filt"><span>Sub-category</span>
+          <select id="catalog-sub-filter"><option value="">All sub-categories</option></select></label>
+        <span class="filt-count" id="catalog-count"></span>
       </div>
       <div id="catalog-gallery" class="gallery-grid"></div>
       <div class="table-wrap hidden" id="catalog-table-wrap"><table id="catalog-table">

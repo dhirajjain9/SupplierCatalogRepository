@@ -55,6 +55,16 @@ async function runPool(items, worker, limit = 5, onDone) {
 // drop, timeout, 429 rate-limit, 5xx). Permanent 4xx errors fail fast. Used for
 // the AI calls that orchestrate long jobs (taxonomy classify/save) so one slow
 // or rate-limited batch can't hang or kill the whole run.
+// Grey + disable the button that triggered a direct (non-modal) async action
+// until it settles, ignoring repeat clicks. The button ref is captured before
+// the first await (currentTarget is cleared once the handler returns).
+async function withButton(ev, fn) {
+  const btn = ev && (ev.currentTarget || ev.target);
+  if (btn) btn.disabled = true;
+  try { return await fn(); }
+  finally { if (btn) btn.disabled = false; }
+}
+
 async function postJsonRetry(url, body, { method = "POST", timeoutMs = 60000, tries = 4 } = {}) {
   let lastErr;
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -254,58 +264,30 @@ document.getElementById("modal-form").addEventListener("submit", async (e) => {
 // Suppliers (type=supplier) and Competitors (type=reference) — same renderer
 // --------------------------------------------------------------------------- //
 const SRC = {
-  supplier: { tableId: "suppliers-table", searchId: "supplier-search", noun: "supplier",
+  supplier: { bodyId: "suppliers-body", searchId: "supplier-search", noun: "supplier", back: "← Suppliers",
               empty: "No suppliers yet", emptySub: "Add a supplier or import a catalog." },
-  reference: { tableId: "competitors-table", searchId: "competitor-search", noun: "competitor",
+  reference: { bodyId: "competitors-body", searchId: "competitor-search", noun: "competitor", back: "← Competitors",
                empty: "No competitors yet", emptySub: "Add a competitor brand or import its portfolio." },
 };
 
-async function loadSources(type) {
+// Shared coverage view for suppliers and competitors: one card per source with
+// its item count, how many categories it spans, and its top categories — plus a
+// drill-in (viewSource) showing the full category-wise SKU breakdown.
+async function renderSourceCards(type) {
   const cfg = SRC[type];
-  const tbody = document.querySelector(`#${cfg.tableId} tbody`);
-  const q = document.getElementById(cfg.searchId).value.trim();
-  tbody.innerHTML = skeletonRows(6);
-  const params = new URLSearchParams({ type });
-  if (q) params.set("search", q);
-  const list = await api.get(`/api/suppliers?${params}`);
-  if (!list.length) {
-    tbody.innerHTML = q
-      ? emptyState(6, ICONS.box, "No matches", `Nothing matches “${q}”.`)
-      : emptyState(6, ICONS.box, cfg.empty, cfg.emptySub);
+  const body = document.getElementById(cfg.bodyId);
+  body.innerHTML = `<p class="muted">Loading…</p>`;
+  const q = document.getElementById(cfg.searchId).value.trim().toLowerCase();
+  const [sups, stats] = await Promise.all([
+    api.get(`/api/suppliers?type=${type}`), api.get("/api/catalog-items/stats"),
+  ]);
+  const refs = q ? sups.filter((s) => (s.name || "").toLowerCase().includes(q)) : sups;
+  if (!refs.length) {
+    body.innerHTML = info(q ? "No matches" : cfg.empty, q ? `Nothing matches “${q}”.` : cfg.emptySub);
     refreshCounts();
     return;
   }
-  tbody.innerHTML = list.map((s) => `<tr>
-      <td>${esc(s.name)}</td>
-      <td>${esc(s.contact_name) || "—"}</td>
-      <td>${esc(s.email) || "—"}</td><td>${esc(s.phone) || "—"}</td>
-      <td>${s.category ? `<span class="pill">${esc(s.category)}</span>` : "—"}</td>
-      <td class="right">
-        <button class="btn link" onclick="editSupplier(${s.id},'${type}')">Edit</button>
-        <button class="btn danger-text" onclick="deleteSupplier(${s.id},'${type}')">Delete</button>
-      </td></tr>`).join("");
-  refreshCounts();
-}
-const loadSuppliers = () => loadSources("supplier");
-
-// --------------------------------------------------------------------------- //
-// Competitors — portfolio cards + drill-in summary (products by master → sub)
-// --------------------------------------------------------------------------- //
-async function loadCompetitors() {
-  const body = document.getElementById("competitors-body");
-  body.innerHTML = `<p class="muted">Loading…</p>`;
-  const q = document.getElementById("competitor-search").value.trim().toLowerCase();
-  const [sups, stats] = await Promise.all([
-    api.get("/api/suppliers?type=reference"), api.get("/api/catalog-items/stats"),
-  ]);
-  let refs = sups;
-  if (q) refs = refs.filter((s) => (s.name || "").toLowerCase().includes(q));
-  if (!refs.length) {
-    body.innerHTML = info("No competitors yet",
-      "Add a competitor brand or import its portfolio (file / Google Sheet).");
-    return;
-  }
-  // per supplier: total + master -> count, and whether classified
+  // Per source: total items, item count per master category, and uncategorized.
   const bySup = {};
   stats.forEach((r) => {
     const b = (bySup[r.supplier_id] = bySup[r.supplier_id] || { total: 0, masters: {}, unclassified: 0 });
@@ -315,38 +297,43 @@ async function loadCompetitors() {
   });
   body.innerHTML = `<div class="cards comp-cards">` + refs.map((s) => {
     const b = bySup[s.id] || { total: 0, masters: {}, unclassified: 0 };
+    const catCount = Object.keys(b.masters).length;
     const tops = Object.entries(b.masters).sort((a, c) => c[1] - a[1]).slice(0, 4);
     const maxN = tops.length ? tops[0][1] : 1;
     const bars = tops.map(([m, n]) =>
       `<div class="cbar"><span class="cbar-l">${esc(m)}</span>
         <span class="cbar-track"><span class="cbar-fill" style="width:${Math.round(n / maxN * 100)}%"></span></span>
         <span class="cbar-n">${n}</span></div>`).join("")
-      || `<p class="muted" style="font-size:12.5px">Not categorized yet — click “Curate categories”.</p>`;
+      || `<p class="muted" style="font-size:12.5px">Not categorized yet — run “Curate categories”.</p>`;
     return `<div class="ccard">
-      <div class="ccard-head">
-        <div><div class="ccard-name">${esc(s.name)}</div>
-          <div class="muted" style="font-size:12.5px">${b.total} products${b.unclassified ? ` · ${b.unclassified} uncategorized` : ""}</div></div>
-      </div>
+      <div class="ccard-head"><div>
+        <div class="ccard-name">${esc(s.name)}</div>
+        <div class="muted" style="font-size:12.5px">${b.total} item${b.total === 1 ? "" : "s"} · ${catCount} categor${catCount === 1 ? "y" : "ies"}${b.unclassified ? ` · ${b.unclassified} uncategorized` : ""}</div>
+      </div></div>
       <div class="ccard-bars">${bars}</div>
       <div class="ccard-foot">
-        <button class="btn link" onclick="viewCompetitor(${s.id})">Summary →</button>
+        <button class="btn link" onclick="viewSource('${type}',${s.id})">Coverage →</button>
         <span class="spacer"></span>
-        <button class="btn link" onclick="editSupplier(${s.id},'reference')">Edit</button>
-        <button class="btn danger-text" onclick="deleteSupplier(${s.id},'reference')">Delete</button>
+        <button class="btn link" onclick="editSupplier(${s.id},'${type}')">Edit</button>
+        <button class="btn danger-text" onclick="deleteSupplier(event,${s.id},'${type}')">Delete</button>
       </div></div>`;
   }).join("") + `</div>`;
+  refreshCounts();
 }
+const loadSuppliers = () => renderSourceCards("supplier");
+const loadCompetitors = () => renderSourceCards("reference");
 
-window.viewCompetitor = async function (id) {
-  const body = document.getElementById("competitors-body");
+// Drill-in: full master → sub category breakdown (with item counts) for one source.
+window.viewSource = async function (type, id) {
+  const cfg = SRC[type];
+  const body = document.getElementById(cfg.bodyId);
   body.innerHTML = `<p class="muted">Loading…</p>`;
   const [sups, stats] = await Promise.all([
-    api.get("/api/suppliers?type=reference"), api.get("/api/catalog-items/stats"),
+    api.get(`/api/suppliers?type=${type}`), api.get("/api/catalog-items/stats"),
   ]);
   const sup = sups.find((s) => s.id === id) || { name: "#" + id };
   const mine = stats.filter((r) => r.supplier_id === id);
   const total = mine.reduce((n, r) => n + r.count, 0);
-  // master -> {total, subs:{sub:count}}
   const tree = {};
   mine.forEach((r) => {
     const m = r.master_category || "Uncategorized";
@@ -362,23 +349,26 @@ window.viewCompetitor = async function (id) {
   }).join("");
   body.innerHTML = `
     <div class="detail-head">
-      <button class="btn" onclick="loadCompetitors()">← Competitors</button>
-      <h3>${esc(sup.name)} <span class="muted">· ${total} products</span></h3>
+      <button class="btn" onclick="${type === 'reference' ? 'loadCompetitors' : 'loadSuppliers'}()">${cfg.back}</button>
+      <h3>${esc(sup.name)} <span class="muted">· ${total} items · ${masters.length} categories</span></h3>
       <span class="spacer"></span>
-      <button class="btn" onclick="viewSupplierProducts(${id})">View products →</button>
+      <button class="btn" onclick="viewSupplierProducts(${id},'${type}')">View products →</button>
     </div>
-    <div class="table-wrap sum-table">${sections}</div>`;
+    <div class="table-wrap sum-table">${sections || '<p class="muted" style="padding:12px">No items yet.</p>'}</div>`;
 };
 
-// Jump to the Catalog tab filtered to this source.
-window.viewSupplierProducts = function (id) {
+// Jump to the Catalog tab filtered to this one source (supplier or competitor).
+window.viewSupplierProducts = function (id, type = "supplier") {
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
   document.querySelector('.tab[data-tab="catalog"]').classList.add("active");
   document.getElementById("catalog").classList.add("active");
   loadCatalog().then(() => {
-    const sel = document.getElementById("catalog-supplier-filter");
-    if (sel) { sel.value = String(id); loadCatalog(); }
+    const supSel = document.getElementById("catalog-supplier-filter");
+    const compSel = document.getElementById("catalog-competitor-filter");
+    if (type === "reference") { compSel.value = String(id); supSel.value = "none"; }
+    else { supSel.value = String(id); compSel.value = "none"; }
+    loadCatalog();
   });
 };
 
@@ -405,7 +395,7 @@ function addSource(type) {
   openModal(`Add ${noun[0].toUpperCase() + noun.slice(1)}`, supplierFields(), async (v) => {
     await api.post("/api/suppliers", { ...cleanEmpty(v), type });
     toast(`${noun[0].toUpperCase() + noun.slice(1)} created`);
-    loadSources(type);
+    renderSourceCards(type);
   });
 }
 
@@ -414,16 +404,16 @@ window.editSupplier = async (id, type) => {
   openModal("Edit", supplierFields(s), async (v) => {
     await api.put(`/api/suppliers/${id}`, cleanEmpty(v));
     toast("Saved");
-    loadSources(type || s.type || "supplier");
+    renderSourceCards(type || s.type || "supplier");
   });
 };
 
-window.deleteSupplier = async (id, type) => {
+window.deleteSupplier = (ev, id, type) => withButton(ev, async () => {
   if (!confirm("Delete this and all its items, quotes and documents?")) return;
   await api.del(`/api/suppliers/${id}`);
   toast("Deleted");
-  loadSources(type || "supplier");
-};
+  renderSourceCards(type || "supplier");
+});
 
 document.querySelectorAll("[data-add-supplier]").forEach((b) =>
   b.addEventListener("click", () => addSource(b.dataset.srctype)));
@@ -463,7 +453,7 @@ function catalogCard(i, thumbDocId) {
       ${i.attributes && Object.keys(i.attributes).length
           ? `<button class="btn link" onclick="viewAttributes(${i.id})">Details</button>` : ""}
       <button class="btn link" onclick="editItem(${i.id})">Edit</button>
-      <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
+      <button class="btn danger-text" onclick="deleteItem(event,${i.id})">Delete</button>
     </div>
   </div>`;
 }
@@ -485,36 +475,77 @@ async function loadCatalog() {
   else tbody.innerHTML = skeletonRows(6);
 
   await ensureSuppliers();
-  const filter = document.getElementById("catalog-supplier-filter");
-  const current = filter.value;
-  filter.innerHTML =
-    `<option value="">All sources</option>` +
-    suppliersCache.map((s) => `<option value="${s.id}">${esc(s.name)}${s.type === "reference" ? " (competitor)" : ""}</option>`).join("");
-  filter.value = current;
-
-  // Master / Sub-category filters (cascading) from the curated taxonomy.
+  const supSel = document.getElementById("catalog-supplier-filter");
+  const compSel = document.getElementById("catalog-competitor-filter");
   const mSel = document.getElementById("catalog-master-filter");
   const sSel = document.getElementById("catalog-sub-filter");
-  const curMaster = mSel.value, curSub = sSel.value;
+
+  const suppliers = suppliersCache.filter((s) => (s.type || "supplier") !== "reference");
+  const competitors = suppliersCache.filter((s) => (s.type || "supplier") === "reference");
+
+  // Repopulate the two source dropdowns, preserving the current choice. Suppliers
+  // default to "all"; competitors default to "none" (hidden) so the catalog shows
+  // suppliers only until the user opts competitors in.
+  const supVal = supSel.value || "all";
+  const compVal = compSel.value || "none";
+  supSel.innerHTML = `<option value="all">All suppliers</option><option value="none">None</option>` +
+    suppliers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  supSel.value = [...supSel.options].some((o) => o.value === supVal) ? supVal : "all";
+  compSel.innerHTML = `<option value="none">None</option><option value="all">All competitors</option>` +
+    competitors.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  compSel.value = [...compSel.options].some((o) => o.value === compVal) ? compVal : "none";
+
+  // Sources in scope — drives both the cascading category options and the fetch.
+  const included = new Set();
+  if (supSel.value === "all") suppliers.forEach((s) => included.add(s.id));
+  else if (supSel.value !== "none") included.add(+supSel.value);
+  if (compSel.value === "all") competitors.forEach((s) => included.add(s.id));
+  else if (compSel.value !== "none") included.add(+compSel.value);
+
+  // Cascading category filters, constrained to the in-scope sources (only show a
+  // master/sub that actually has items in scope), with a live count per option.
   const stats = await api.get("/api/catalog-items/stats");
-  const masters = [...new Set(stats.map((r) => r.master_category).filter(Boolean))].sort();
+  const inScope = stats.filter((r) => included.has(r.supplier_id));
+  const sumWhere = (pred) => inScope.filter(pred).reduce((n, r) => n + r.count, 0);
+  const curMaster = mSel.value, curSub = sSel.value;
+  const masters = [...new Set(inScope.map((r) => r.master_category).filter(Boolean))].sort();
   mSel.innerHTML = `<option value="">All master categories</option>` +
-    masters.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    masters.map((m) => `<option value="${esc(m)}">${esc(m)} (${sumWhere((r) => r.master_category === m)})</option>`).join("");
   mSel.value = masters.includes(curMaster) ? curMaster : "";
-  const subs = [...new Set(stats.filter((r) => !mSel.value || r.master_category === mSel.value)
+  const subs = [...new Set(inScope.filter((r) => !mSel.value || r.master_category === mSel.value)
     .map((r) => r.sub_category).filter(Boolean))].sort();
   sSel.innerHTML = `<option value="">All sub-categories</option>` +
-    subs.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+    subs.map((sb) => `<option value="${esc(sb)}">${esc(sb)} (${sumWhere((r) => r.sub_category === sb && (!mSel.value || r.master_category === mSel.value))})</option>`).join("");
   sSel.value = subs.includes(curSub) ? curSub : "";
 
+  // Fetch the union of the supplier scope and the competitor scope. Each scope is
+  // one request (a specific id, or all of a type); results are merged + de-duped.
   const q = document.getElementById("catalog-search").value.trim();
-  const params = new URLSearchParams();
-  if (filter.value) params.set("supplier_id", filter.value);
-  if (mSel.value) params.set("master_category", mSel.value);
-  if (sSel.value) params.set("sub_category", sSel.value);
-  if (q) params.set("search", q);
-  const url = "/api/catalog-items" + (params.toString() ? `?${params}` : "");
-  itemsCache = await api.get(url);
+  const common = new URLSearchParams();
+  if (mSel.value) common.set("master_category", mSel.value);
+  if (sSel.value) common.set("sub_category", sSel.value);
+  if (q) common.set("search", q);
+  const mkUrl = (extra) => {
+    const p = new URLSearchParams(common);
+    Object.entries(extra).forEach(([k, v]) => p.set(k, v));
+    return `/api/catalog-items?${p}`;
+  };
+  const urls = [];
+  if (supSel.value === "all") urls.push(mkUrl({ source_type: "supplier" }));
+  else if (supSel.value !== "none") urls.push(mkUrl({ supplier_id: supSel.value }));
+  if (compSel.value === "all") urls.push(mkUrl({ source_type: "reference" }));
+  else if (compSel.value !== "none") urls.push(mkUrl({ supplier_id: compSel.value }));
+
+  itemsCache = [];
+  if (urls.length) {
+    const seen = new Set();
+    (await Promise.all(urls.map((u) => api.get(u)))).flat().forEach((it) => {
+      if (!seen.has(it.id)) { seen.add(it.id); itemsCache.push(it); }
+    });
+    itemsCache.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }
+  document.getElementById("catalog-count").textContent =
+    itemsCache.length ? `${itemsCache.length} item${itemsCache.length === 1 ? "" : "s"}` : "";
 
   // Thumbnails: prefer a product's own photo, else fall back to its source-page image.
   const itemThumb = {}, pageThumb = {};
@@ -532,9 +563,11 @@ async function loadCatalog() {
     || null;
 
   if (!itemsCache.length) {
-    const filtering = q || filter.value || mSel.value || sSel.value;
-    const title = filtering ? "No matching items" : "No catalog items yet";
-    const sub = filtering ? "Try clearing the search or filters." : "Import a catalog or add an item to begin.";
+    const noSources = !included.size;
+    const filtering = q || mSel.value || sSel.value || supSel.value !== "all" || compSel.value !== "none";
+    const title = noSources ? "No sources selected" : filtering ? "No matching items" : "No catalog items yet";
+    const sub = noSources ? "Pick a supplier or competitor above to see items."
+      : filtering ? "Try clearing the search or filters." : "Import a catalog or add an item to begin.";
     gallery.innerHTML = `<div class="gallery-empty">${ICONS.box}<div class="empty-title">${title}</div><div class="empty-sub">${sub}</div></div>`;
     tbody.innerHTML = emptyState(6, ICONS.box, title, sub);
     refreshCounts();
@@ -567,7 +600,7 @@ async function loadCatalog() {
           ${i.attributes && Object.keys(i.attributes).length
               ? `<button class="btn link" onclick="viewAttributes(${i.id})">Columns</button>` : ""}
           <button class="btn link" onclick="editItem(${i.id})">Edit</button>
-          <button class="btn danger-text" onclick="deleteItem(${i.id})">Delete</button>
+          <button class="btn danger-text" onclick="deleteItem(event,${i.id})">Delete</button>
         </td></tr>`;
     }).join("");
     if (moreNote) tbody.insertAdjacentHTML("afterbegin", `<tr><td colspan="6">${moreNote}</td></tr>`);
@@ -641,14 +674,15 @@ window.editItem = async (id) => {
   });
 };
 
-window.deleteItem = async (id) => {
+window.deleteItem = (ev, id) => withButton(ev, async () => {
   if (!confirm("Delete this item and its quotes and documents?")) return;
   await api.del(`/api/catalog-items/${id}`);
   toast("Item deleted");
   loadCatalog();
-};
+});
 
 document.getElementById("catalog-supplier-filter").addEventListener("change", loadCatalog);
+document.getElementById("catalog-competitor-filter").addEventListener("change", loadCatalog);
 document.getElementById("catalog-master-filter").addEventListener("change", () => {
   document.getElementById("catalog-sub-filter").value = "";  // reset sub when master changes
   loadCatalog();
@@ -1223,8 +1257,9 @@ function goToSupplierCatalog(supplierId) {
   tab.classList.add("active");
   document.getElementById("catalog").classList.add("active");
   loadCatalog().then(() => {
-    const sel = document.getElementById("catalog-supplier-filter");
-    if (supplierId && sel) { sel.value = String(supplierId); loadCatalog(); }
+    const supSel = document.getElementById("catalog-supplier-filter");
+    const compSel = document.getElementById("catalog-competitor-filter");
+    if (supplierId && supSel) { supSel.value = String(supplierId); if (compSel) compSel.value = "none"; loadCatalog(); }
   });
 }
 

@@ -255,6 +255,20 @@ td.right { white-space: nowrap; }
 /* Disabled buttons read as inactive everywhere. */
 .btn:disabled, .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 
+/* Catalog filter bar: a labelled row of dropdowns under the panel header. */
+.filter-bar {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px;
+  padding: 14px 4px 4px; margin-bottom: 8px;
+}
+.filter-bar .filt { display: flex; flex-direction: column; gap: 4px; }
+.filter-bar .filt > span {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  text-transform: uppercase; color: var(--muted);
+}
+.filter-bar .filt select { min-width: 170px; }
+.filter-bar .filt-count { margin-left: auto; align-self: center;
+  font-size: 13px; color: var(--muted); font-weight: 500; }
+
 /* Busy modal: an operation is running. Hide the dismiss controls so the dialog
    stays put, and turn the action button into a spinner so it's clearly working. */
 .modal-overlay.busy #modal-cancel,
