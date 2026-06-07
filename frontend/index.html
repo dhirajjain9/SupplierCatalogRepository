@@ -67,15 +67,22 @@
       <div class="panel-head">
         <h2>Competitors</h2>
         <div class="actions">
-          <input type="search" id="competitor-search" placeholder="Search competitors…" />
+          <input type="search" class="search" id="competitor-search" placeholder="Search competitors…" />
           <button class="btn" id="curate-ai" title="Consolidate product types with AI across all brands">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>
             Curate categories</button>
-          <button class="btn" data-import="catalog" data-srctype="reference">⬆ Portfolio</button>
-          <button class="btn" data-import="sheet" data-srctype="reference">⬇ Google Sheet</button>
-          <button class="btn" data-import="chat" data-srctype="reference">📨 From Chat</button>
-          <button class="btn" data-import="drive" data-srctype="reference">📁 From Drive</button>
-          <button class="btn" data-import="images" data-srctype="reference">🖼 Images</button>
+          <div class="dropdown">
+            <button type="button" class="btn" data-dd-toggle>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+              Import <span class="chev">▾</span></button>
+            <div class="dropdown-menu">
+              <button type="button" class="dd-item" data-import="catalog" data-srctype="reference">📄 Portfolio file <span class="dd-sub">CSV · Excel · PDF</span></button>
+              <button type="button" class="dd-item" data-import="sheet" data-srctype="reference">📊 Google Sheet</button>
+              <button type="button" class="dd-item" data-import="chat" data-srctype="reference">📨 From Chat</button>
+              <button type="button" class="dd-item" data-import="drive" data-srctype="reference">📁 From Drive</button>
+              <button type="button" class="dd-item" data-import="images" data-srctype="reference">🖼 Images</button>
+            </div>
+          </div>
           <button class="btn" data-merge data-srctype="reference" title="Combine duplicate competitors into one">🔀 Merge</button>
           <button class="btn primary" data-add-supplier data-srctype="reference">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
