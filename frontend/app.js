@@ -83,7 +83,9 @@ async function postJsonRetry(url, body, { method = "POST", timeoutMs = 60000, tr
       const e = await res.json().catch(() => ({}));
       throw new Error(e.detail || `Request failed (HTTP ${res.status})`);
     }
-    lastErr = new Error(`HTTP ${res.status}`);       // transient — back off & retry
+    // transient (429/5xx) — keep the server's detail so the real cause is shown
+    const e = await res.json().catch(() => ({}));
+    lastErr = new Error(e.detail || `HTTP ${res.status}`);
     if (attempt < tries - 1) await new Promise((r) => setTimeout(r, 800 * 2 ** attempt));
   }
   throw lastErr || new Error("Request failed");
