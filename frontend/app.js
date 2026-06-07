@@ -2152,6 +2152,19 @@ window.deleteDocument = async (id) => {
 let taxonomyEnabled = false;
 fetch("/api/taxonomy/config").then((r) => r.json()).then((c) => { taxonomyEnabled = !!c.enabled; }).catch(() => {});
 
+// Latest computed gaps (competitor covers, suppliers don't), largest first —
+// stashed so the "View gaps" popup can list them all.
+let coverageGaps = [];
+window.viewGaps = function () {
+  openModal(`Biggest gaps (${coverageGaps.length})`, [], async () => {});
+  const list = coverageGaps.map((g) =>
+    `<div class="sumrow"><span>${esc(g.m)} › ${esc(g.s)}</span><span class="num">${g.ref}</span></div>`).join("");
+  document.getElementById("modal-fields").innerHTML =
+    `<p class="muted">Categories competitors cover that your suppliers don't — the number is how many competitor products sit in that gap. Largest first.</p>`
+    + `<div class="sum-table" style="max-height:60vh;overflow:auto">${list || '<p class="muted">No gaps. 🎉</p>'}</div>`;
+  document.getElementById("modal-extra").innerHTML = "";
+};
+
 async function loadCoverage() {
   const body = document.getElementById("coverage-body");
   body.innerHTML = `<p class="muted">Loading…</p>`;
@@ -2201,6 +2214,7 @@ async function loadCoverage() {
   }));
   const pct = refSubs ? Math.round((coveredSubs / refSubs) * 100) : 0;
   gaps.sort((a, b) => b.ref - a.ref);
+  coverageGaps = gaps;
 
   const masters = Object.keys(tree).sort();
   const rows = masters.map((m) => {
@@ -2220,11 +2234,12 @@ async function loadCoverage() {
     <div class="cards">
       <div class="card"><div class="card-n">${pct}%</div><div class="card-l">category coverage</div></div>
       <div class="card"><div class="card-n">${coveredSubs}/${refSubs}</div><div class="card-l">sub-categories covered</div></div>
-      <div class="card"><div class="card-n">${gaps.length}</div><div class="card-l">gaps (competitor has, you don't)</div></div>
+      <div class="card${gaps.length ? " clickable" : ""}"${gaps.length ? ' onclick="viewGaps()" title="View all gaps"' : ""}><div class="card-n">${gaps.length}</div><div class="card-l">gaps (competitor has, you don't)</div></div>
     </div>
-    ${gaps.length ? `<div class="gaps-box"><h3>Biggest gaps</h3>
-      <div class="gap-chips">${gaps.slice(0, 16).map((g) =>
-        `<span class="gap-chip">${esc(g.m)} › ${esc(g.s)} <b>${g.ref}</b></span>`).join("")}</div></div>` : ""}
+    ${gaps.length ? `<div class="gaps-box">
+      <h3>Biggest gaps</h3>
+      <p class="muted" style="margin:0 0 10px">${gaps.length} categories competitors cover that your suppliers don't — top one is <strong>${esc(gaps[0].m)} › ${esc(gaps[0].s)}</strong> (${gaps[0].ref}).</p>
+      <button class="btn" onclick="viewGaps()">View all ${gaps.length} gaps →</button></div>` : ""}
     <div class="table-wrap" style="margin-top:18px"><table class="cov-table">
       <thead><tr><th>Master</th><th>Sub-category</th><th class="num">Competitor</th><th class="num">Suppliers</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
