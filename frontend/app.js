@@ -89,6 +89,21 @@ async function postJsonRetry(url, body, { method = "POST", timeoutMs = 60000, tr
   throw lastErr || new Error("Request failed");
 }
 
+// Turn a batch failure into a readable line that shows the *actual* server error
+// (not a generic "AI was busy"), so misconfig/credit/rate-limit issues are visible.
+function failureReason(err, failedCount) {
+  const msg = (err && err.message) ? err.message : "Unknown error";
+  return `${failedCount} couldn't be classified — ${msg}. Click again to retry the rest.`;
+}
+// When *every* batch failed, the cause is almost always the AI key/credits, so
+// add a pointed hint.
+function apiKeyHintIf(allFailed) {
+  return allFailed
+    ? `<p class="muted">All batches failed — this usually means the server's <code>ANTHROPIC_API_KEY</code> `
+      + `is invalid/expired, out of credit, or rate-limited. Check the key and billing in Vercel.</p>`
+    : "";
+}
+
 // Small in-memory caches so dropdowns/labels can resolve names by id.
 let suppliersCache = [];
 let itemsCache = [];
@@ -2312,7 +2327,7 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
       // saving each batch as it lands so progress is durable. A batch that still
       // fails after retries is counted, not fatal — the run always finishes.
       const batches = chunk(todo, 40);
-      let done = 0, failed = 0;
+      let done = 0, failed = 0, lastErr = null;
       await runPool(batches, async (b) => {
         try {
           const res = await postJsonRetry("/api/taxonomy/classify", {
@@ -2320,7 +2335,7 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
           });
           if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
         } catch (e) {
-          failed += b.length;
+          failed += b.length; lastErr = e;
         }
         done += b.length;
         fields.innerHTML = `<p class="muted">Filing products into ${ncat} categories… (${done}/${todo.length})</p>`;
@@ -2328,7 +2343,7 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
 
       fields.innerHTML = failed
         ? `<p><strong>Curated ${todo.length - failed} of ${todo.length}</strong> products into ${ncat} categories.</p>`
-          + `<p class="errs">${failed} couldn't be classified this run (the AI was busy). Click Curate again to finish them.</p>`
+          + `<p class="errs">${esc(failureReason(lastErr, failed))}</p>${apiKeyHintIf(failed === todo.length)}`
         : `<p><strong>Curated ${done} products</strong> into ${ncat} categories. 🎉</p>`;
       setSaveLabel("Done"); onSubmit = async () => {};
       loadCompetitors(); refreshCounts();
@@ -2516,7 +2531,7 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
         tax = await postJsonRetry("/api/taxonomy/suggest", { samples }, { timeoutMs: 90000 });
       }
       const batches = chunk(todo, 40);
-      let done = 0, failed = 0;
+      let done = 0, failed = 0, lastErr = null;
       await runPool(batches, async (b) => {
         try {
           const res = await postJsonRetry("/api/taxonomy/classify", {
@@ -2524,14 +2539,14 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
           });
           if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
         } catch (e) {
-          failed += b.length;
+          failed += b.length; lastErr = e;
         }
         done += b.length;
         fields.innerHTML = `<p class="muted">Classifying products… (${done}/${todo.length})</p>`;
       }, 5);
       fields.innerHTML = failed
         ? `<p><strong>Classified ${todo.length - failed} of ${todo.length}</strong> products.</p>`
-          + `<p class="errs">${failed} couldn't be classified this run (the AI was busy). Click Classify again to finish them.</p>`
+          + `<p class="errs">${esc(failureReason(lastErr, failed))}</p>${apiKeyHintIf(failed === todo.length)}`
         : `<p><strong>Classified ${done} products.</strong> 🎉</p>`;
       setSaveLabel("Done"); onSubmit = async () => {};
       loadCoverage();
