@@ -2356,6 +2356,48 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
   setSaveLabel("Curate");
 });
 
+// Bulk-assign a master/sub category to whatever items are currently in view
+// (the active supplier/competitor/category/search filters) — e.g. filter to a
+// supplier's "Other" pile and give them a real home. Seeds the taxonomy too, so
+// future Curate keeps the category.
+document.getElementById("set-category").addEventListener("click", async () => {
+  if (!itemsCache.length) return toast("No items in view — filter the catalog first.", true);
+  const ids = itemsCache.map((i) => i.id);
+  openModal("Set category", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    const M = (fields.querySelector("#setcat-master") || {}).value;
+    const S = (fields.querySelector("#setcat-sub") || {}).value;
+    const master = (M || "").trim(), sub = (S || "").trim();
+    if (!master) throw new Error("Enter a master category.");
+    let done = 0;
+    await runPool(chunk(ids, 200), async (b) => {
+      await postJsonRetry("/api/taxonomy/save",
+        { items: b.map((id) => ({ id, master_category: master, sub_category: sub || null })) }, { method: "PUT" });
+      done += b.length;
+      fields.innerHTML = `<p class="muted">Setting category on ${done}/${ids.length} item(s)…</p>`;
+    }, 4);
+    fields.innerHTML = `<p><strong>Set ${ids.length} item(s)</strong> to “${esc(master)}${sub ? " › " + esc(sub) : ""}”. 🎉</p>`;
+    setSaveLabel("Done"); onSubmit = async () => {};
+    loadCatalog(); refreshCounts();
+    return false;
+  });
+  const fields = document.getElementById("modal-fields");
+  fields.innerHTML = `<p class="muted">Loading categories…</p>`;
+  setSaveLabel(`Set category for ${ids.length}`);
+  const stats = await api.get("/api/catalog-items/stats").catch(() => []);
+  const masters = [...new Set(stats.map((r) => r.master_category).filter(Boolean))].sort();
+  const subs = [...new Set(stats.map((r) => r.sub_category).filter(Boolean))].sort();
+  fields.innerHTML = `
+    <p class="muted">Assign a category to the <strong>${ids.length}</strong> item(s) currently in view
+       (matching the active filters/search). Pick an existing one or type a new category.</p>
+    <div class="field"><label>Master category</label>
+      <input id="setcat-master" list="setcat-masters" placeholder="e.g. Home Storage & Organization" autocomplete="off" /></div>
+    <datalist id="setcat-masters">${masters.map((m) => `<option value="${esc(m)}">`).join("")}</datalist>
+    <div class="field"><label>Sub-category (optional)</label>
+      <input id="setcat-sub" list="setcat-subs" placeholder="e.g. Bins & Waste Management" autocomplete="off" /></div>
+    <datalist id="setcat-subs">${subs.map((s) => `<option value="${esc(s)}">`).join("")}</datalist>`;
+});
+
 // Preview + remove banner/summary rows that aren't real products.
 document.getElementById("cleanup-junk").addEventListener("click", () => {
   openModal("Remove junk rows", [], async () => {
