@@ -9,14 +9,42 @@ from sqlalchemy.orm import Session
 
 from backend import models, schemas
 from backend.database import get_db
-from backend.services import taxonomy
+from backend.services import embed_classify, taxonomy
 
 router = APIRouter(prefix="/api/taxonomy", tags=["analysis"])
 
 
 @router.get("/config")
 def taxonomy_config() -> dict:
-    return {"enabled": taxonomy.is_configured(), "model": taxonomy.DEFAULT_MODEL}
+    return {
+        "enabled": taxonomy.is_configured(),
+        "model": taxonomy.DEFAULT_MODEL,
+        # When true, the browser routes the (high-volume) classify step to the
+        # free local embeddings backend instead of the paid LLM.
+        "embed_enabled": embed_classify.is_available(),
+        "embed_model": embed_classify.model_name() if embed_classify.is_available() else None,
+    }
+
+
+@router.post("/classify-embed")
+def classify_embed(payload: schemas.ClassifyIn) -> dict:
+    """Zero-cost classification via local sentence embeddings (no LLM credits).
+
+    Requires the optional ``sentence-transformers`` dependency; otherwise 400 so
+    the caller falls back to the LLM classifier."""
+    if not embed_classify.is_available():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Embedding classifier isn't available on this server (install "
+            "sentence-transformers and set EMBED_CLASSIFY=1).",
+        )
+    if not payload.taxonomy.get("categories"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No taxonomy to classify into.")
+    try:
+        results = embed_classify.classify_items([i.model_dump() for i in payload.items], payload.taxonomy)
+        return {"items": results}
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Embedding classification failed: {exc}")
 
 
 @router.post("/suggest")

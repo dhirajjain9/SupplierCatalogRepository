@@ -10,7 +10,12 @@ from __future__ import annotations
 import json
 import os
 
-from backend.services.vision import DEFAULT_MODEL, VisionNotConfigured, _parse_json, is_configured  # noqa: F401
+from backend.services.vision import VisionNotConfigured, _parse_json, is_configured  # noqa: F401
+
+# Taxonomy work (deriving categories + classifying products) is text-only and
+# high-volume, so it defaults to the cheap model — NOT the Sonnet vision default.
+# Override with TAXONOMY_MODEL if you want a different one.
+DEFAULT_MODEL = os.environ.get("TAXONOMY_MODEL", "claude-haiku-4-5-20251001")
 
 TAXONOMY_SYSTEM = (
     "You build ONE consolidated, comparable 2-level taxonomy for a home/kitchen/"

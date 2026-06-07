@@ -1,0 +1,13 @@
+# OPTIONAL — zero-cost local classifier (see backend/services/embed_classify.py).
+# NOT installed on Vercel (torch + model weights are far too large for the
+# serverless bundle). Install on a self-hosted/VPS deployment to file products
+# into the taxonomy with local embeddings instead of the paid LLM:
+#
+#   pip install -r requirements-embed.txt
+#   export EMBED_CLASSIFY=1            # optional; auto-on once importable
+#   # optional overrides:
+#   # export EMBED_MODEL=intfloat/multilingual-e5-small
+#   # export EMBED_MIN_SIM=0.0        # send below-threshold items to "Other"
+#
+# The first run downloads the model (~120 MB) and caches it. CPU is fine.
+sentence-transformers>=3.0

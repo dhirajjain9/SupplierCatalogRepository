@@ -2164,8 +2164,15 @@ window.deleteDocument = async (id) => {
 // --------------------------------------------------------------------------- //
 // Coverage — competitor portfolio vs supplier catalog (AI-classified taxonomy)
 // --------------------------------------------------------------------------- //
-let taxonomyEnabled = false;
-fetch("/api/taxonomy/config").then((r) => r.json()).then((c) => { taxonomyEnabled = !!c.enabled; }).catch(() => {});
+let taxonomyEnabled = false, embedEnabled = false, embedModel = null;
+fetch("/api/taxonomy/config").then((r) => r.json()).then((c) => {
+  taxonomyEnabled = !!c.enabled; embedEnabled = !!c.embed_enabled; embedModel = c.embed_model || null;
+}).catch(() => {});
+// The high-volume classify step goes to the free local embeddings backend when
+// it's available, else the paid LLM. (Deriving a taxonomy still needs the LLM.)
+const classifyUrl = () => (embedEnabled ? "/api/taxonomy/classify-embed" : "/api/taxonomy/classify");
+const classifierNote = () => embedEnabled
+  ? `<p class="muted">Using the free local classifier${embedModel ? ` (${esc(embedModel)})` : ""} — no AI credits.</p>` : "";
 
 // Latest computed gaps (competitor covers, suppliers don't), largest first —
 // stashed so the "View gaps" popup can list them all.
@@ -2330,7 +2337,7 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
       let done = 0, failed = 0, lastErr = null;
       await runPool(batches, async (b) => {
         try {
-          const res = await postJsonRetry("/api/taxonomy/classify", {
+          const res = await postJsonRetry(classifyUrl(), {
             taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.sub_category || i.category })),
           });
           if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
@@ -2343,7 +2350,7 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
 
       fields.innerHTML = failed
         ? `<p><strong>Curated ${todo.length - failed} of ${todo.length}</strong> products into ${ncat} categories.</p>`
-          + `<p class="errs">${esc(failureReason(lastErr, failed))}</p>${apiKeyHintIf(failed === todo.length)}`
+          + `<p class="errs">${esc(failureReason(lastErr, failed))}</p>${apiKeyHintIf(failed === todo.length && !embedEnabled)}`
         : `<p><strong>Curated ${done} products</strong> into ${ncat} categories. 🎉</p>`;
       setSaveLabel("Done"); onSubmit = async () => {};
       loadCompetitors(); refreshCounts();
@@ -2367,7 +2374,8 @@ document.getElementById("curate-ai").addEventListener("click", async () => {
       </select></div>
     <p class="muted">Curate always rebuilds one consolidated taxonomy from the whole catalog. Choose
        what to re-file into it: everything, only the unclassified items, or a single source — so you
-       don't re-spend AI credits on products that are already filed. Runs in parallel and always finishes.</p>`;
+       don't re-spend AI credits on products that are already filed. Runs in parallel and always finishes.</p>
+    ${classifierNote()}`;
   setSaveLabel("Curate");
 });
 
@@ -2480,7 +2488,7 @@ document.getElementById("coverage-brand").addEventListener("change", loadCoverag
 // a taxonomy only when nothing is classified yet.
 const isOtherCat = (m) => /^(other|uncategorized)$/i.test((m || "").trim());
 document.getElementById("classify-ai").addEventListener("click", async () => {
-  if (!taxonomyEnabled) return toast("AI classification isn't enabled (set ANTHROPIC_API_KEY)", true);
+  if (!taxonomyEnabled && !embedEnabled) return toast("Classification isn't enabled (set ANTHROPIC_API_KEY, or the embeddings backend)", true);
   // Per source: items that still need a real category — either unclassified (no
   // master) or sitting in the "Other" bucket — so the dropdown only offers work.
   const [sups, stats] = await Promise.all([api.get("/api/suppliers"), api.get("/api/catalog-items/stats")]);
@@ -2524,17 +2532,20 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
         existing.forEach((i) => { (tree[i.master_category] = tree[i.master_category] || new Set()).add(i.sub_category || "General"); });
         tax = { categories: Object.entries(tree).map(([m, subs]) => ({ master: m, subs: [...subs] })) };
         fields.innerHTML = `<p class="muted">Aligning to the existing taxonomy (${tax.categories.length} categories)…</p>`;
-      } else {
+      } else if (taxonomyEnabled) {
         fields.innerHTML = `<p class="muted">Deriving categories from ${items.length} products…</p>`;
         const samples = [...new Set(items.map((i) => i.category).filter(Boolean))]
           .concat(items.slice(0, 300).map((i) => i.name));
         tax = await postJsonRetry("/api/taxonomy/suggest", { samples }, { timeoutMs: 90000 });
+      } else {
+        // Embeddings can only file into an existing taxonomy; creating one needs the LLM.
+        throw new Error("No categories exist yet. Run “Curate categories” first (that step needs the AI key) to create the taxonomy.");
       }
       const batches = chunk(todo, 40);
       let done = 0, failed = 0, lastErr = null;
       await runPool(batches, async (b) => {
         try {
-          const res = await postJsonRetry("/api/taxonomy/classify", {
+          const res = await postJsonRetry(classifyUrl(), {
             taxonomy: tax, items: b.map((i) => ({ id: i.id, name: i.name, category: i.category })),
           });
           if (res.items && res.items.length) await postJsonRetry("/api/taxonomy/save", { items: res.items }, { method: "PUT" });
@@ -2546,7 +2557,7 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
       }, 5);
       fields.innerHTML = failed
         ? `<p><strong>Classified ${todo.length - failed} of ${todo.length}</strong> products.</p>`
-          + `<p class="errs">${esc(failureReason(lastErr, failed))}</p>${apiKeyHintIf(failed === todo.length)}`
+          + `<p class="errs">${esc(failureReason(lastErr, failed))}</p>${apiKeyHintIf(failed === todo.length && !embedEnabled)}`
         : `<p><strong>Classified ${done} products.</strong> 🎉</p>`;
       setSaveLabel("Done"); onSubmit = async () => {};
       loadCoverage();
@@ -2581,8 +2592,9 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
         <option value="other">Only items in “Other”</option>
       </select></div>
     <p class="muted">Pick a source and which items to (re)file — e.g. one supplier’s “Other” products.
-       “Other” items are pushed into a real category where one fits. Runs in parallel and uses AI
-       credits; the dialog stays open until it finishes.</p>`;
+       “Other” items are pushed into a real category where one fits. Runs in parallel;
+       the dialog stays open until it finishes.</p>
+    ${classifierNote()}`;
   setSaveLabel("Classify");
 });
 

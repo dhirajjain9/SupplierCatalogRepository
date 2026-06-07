@@ -87,6 +87,22 @@ Google Drive folder (e.g. the folder your WhatsApp catalogs get saved into).
    *Connect Google* once, and import. CSV/Excel/text PDFs import directly;
    image-only PDFs run through the browser AI vision flow.
 
+## Lowering AI cost
+The only pay-per-call dependency is the Anthropic API key. Two knobs reduce it:
+
+- **`TAXONOMY_MODEL`** — model for Curate + Classify (text-only, high volume).
+  Defaults to the cheap `claude-haiku-4-5-20251001`. (Vision keeps its own
+  `VISION_MODEL`, default Sonnet, used only for image-only PDFs.)
+- **Local embeddings classifier (free)** — on a self-hosted/VPS deployment you
+  can do the high-volume *classify* step with no API credits at all:
+  ```bash
+  pip install -r requirements-embed.txt
+  export EMBED_CLASSIFY=1
+  ```
+  When available, the app routes classification to it automatically (Curate still
+  uses the LLM once to *derive* the taxonomy). Too large for Vercel's serverless
+  bundle, so it stays off there and the LLM (Haiku) is used instead.
+
 ## Locking it down later
 The link is currently open to anyone who has it. To add a single shared password
 (no per-user accounts), this can be done with a small middleware + a login screen —
