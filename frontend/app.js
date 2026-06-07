@@ -2421,34 +2421,46 @@ document.getElementById("coverage-brand").addEventListener("change", loadCoverag
 // Classify unclassified items INTO the existing (competitor) taxonomy so
 // supplier and competitor products share one vocabulary; fall back to deriving
 // a taxonomy only when nothing is classified yet.
+const isOtherCat = (m) => /^(other|uncategorized)$/i.test((m || "").trim());
 document.getElementById("classify-ai").addEventListener("click", async () => {
   if (!taxonomyEnabled) return toast("AI classification isn't enabled (set ANTHROPIC_API_KEY)", true);
-  // Which sources still have unclassified items — so the dropdown only offers
-  // targets that actually need work (no wasted effort on fully-classified ones).
+  // Per source: items that still need a real category — either unclassified (no
+  // master) or sitting in the "Other" bucket — so the dropdown only offers work.
   const [sups, stats] = await Promise.all([api.get("/api/suppliers"), api.get("/api/catalog-items/stats")]);
   const nameById = Object.fromEntries(sups.map((s) => [s.id, s.name]));
   const typeById = Object.fromEntries(sups.map((s) => [s.id, s.type || "supplier"]));
-  const unclassBy = {};
-  stats.forEach((r) => { if (!r.master_category) unclassBy[r.supplier_id] = (unclassBy[r.supplier_id] || 0) + r.count; });
-  const remaining = Object.entries(unclassBy).map(([id, n]) => ({ id: +id, n }))
-    .filter((r) => r.n > 0).sort((a, b) => b.n - a.n);
-  const totalRemaining = remaining.reduce((s, r) => s + r.n, 0);
+  const blankBy = {}, otherBy = {};
+  stats.forEach((r) => {
+    if (!r.master_category) blankBy[r.supplier_id] = (blankBy[r.supplier_id] || 0) + r.count;
+    else if (isOtherCat(r.master_category)) otherBy[r.supplier_id] = (otherBy[r.supplier_id] || 0) + r.count;
+  });
+  const ids = [...new Set([...Object.keys(blankBy), ...Object.keys(otherBy)].map(Number))];
+  const remaining = ids.map((id) => ({ id, u: blankBy[id] || 0, o: otherBy[id] || 0 }))
+    .filter((r) => r.u + r.o > 0).sort((a, b) => (b.u + b.o) - (a.u + a.o));
+  const totalU = remaining.reduce((s, r) => s + r.u, 0);
+  const totalO = remaining.reduce((s, r) => s + r.o, 0);
 
   openModal("Classify with AI", [], async () => {
     const fields = document.getElementById("modal-fields");
     const scope = (fields.querySelector("#classify-scope") || {}).value || "all";
+    const which = (fields.querySelector("#classify-which") || {}).value || "both";
     await new Promise((r) => setTimeout(r, 0));  // let the modal paint first
     try {
       const items = await api.get("/api/catalog-items");
       const inScope = scope === "all" ? items : items.filter((i) => i.supplier_id === +scope);
-      const todo = inScope.filter((i) => !i.master_category);
+      const elig = (i) => {
+        const blank = !i.master_category, other = isOtherCat(i.master_category);
+        return which === "blank" ? blank : which === "other" ? other : (blank || other);
+      };
+      const todo = inScope.filter(elig);
       if (!todo.length) {
-        fields.innerHTML = "<p>Nothing left to classify here. 🎉</p>";
+        fields.innerHTML = "<p>Nothing to (re)classify for that selection. 🎉</p>";
         setSaveLabel("Done"); onSubmit = async () => {}; loadCoverage(); return false;
       }
-      // Align to the taxonomy already in use across the whole catalog (so every
-      // source shares one vocabulary); derive one only if nothing's classified yet.
-      const existing = items.filter((i) => i.master_category);
+      // Build the taxonomy from REAL categories only (exclude Other/Uncategorized)
+      // so re-filing 'Other' items is pushed toward a genuine category. Derive a
+      // fresh one only if nothing real is classified yet.
+      const existing = items.filter((i) => i.master_category && !isOtherCat(i.master_category));
       let tax;
       if (existing.length) {
         const tree = {};
@@ -2489,23 +2501,31 @@ document.getElementById("classify-ai").addEventListener("click", async () => {
   });
 
   if (!remaining.length) {
-    document.getElementById("modal-fields").innerHTML = "<p>Everything is already classified. 🎉</p>";
+    document.getElementById("modal-fields").innerHTML = "<p>Everything is already filed into real categories. 🎉</p>";
     setSaveLabel("Done"); onSubmit = async () => { loadCoverage(); };
     return;
   }
   const opt = (r) => {
     const tag = typeById[r.id] === "reference" ? " (competitor)" : "";
-    return `<option value="${r.id}">${esc(nameById[r.id] || ("#" + r.id))}${tag} — ${r.n} unclassified</option>`;
+    const bits = [r.u ? `${r.u} unclassified` : "", r.o ? `${r.o} in Other` : ""].filter(Boolean).join(", ");
+    return `<option value="${r.id}">${esc(nameById[r.id] || ("#" + r.id))}${tag} — ${bits}</option>`;
   };
+  const allBits = [totalU ? `${totalU} unclassified` : "", totalO ? `${totalO} in Other` : ""].filter(Boolean).join(", ");
   document.getElementById("modal-fields").innerHTML = `
-    <div class="field"><label>Classify</label>
+    <div class="field"><label>Source</label>
       <select id="classify-scope">
-        <option value="all">All sources with unclassified items (${totalRemaining})</option>
+        <option value="all">All sources — ${allBits}</option>
         ${remaining.map(opt).join("")}
       </select></div>
-    <p class="muted">Only sources that still have unclassified items are listed — pick one to
-       target it, or “All”. Items align to the existing taxonomy; it runs in parallel and uses
-       AI credits. The dialog stays open until it finishes.</p>`;
+    <div class="field"><label>Which items</label>
+      <select id="classify-which">
+        <option value="both">Unclassified + items in “Other”</option>
+        <option value="blank">Only unclassified</option>
+        <option value="other">Only items in “Other”</option>
+      </select></div>
+    <p class="muted">Pick a source and which items to (re)file — e.g. one supplier’s “Other” products.
+       “Other” items are pushed into a real category where one fits. Runs in parallel and uses AI
+       credits; the dialog stays open until it finishes.</p>`;
   setSaveLabel("Classify");
 });
 
