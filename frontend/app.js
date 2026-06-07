@@ -2157,12 +2157,34 @@ fetch("/api/taxonomy/config").then((r) => r.json()).then((c) => { taxonomyEnable
 let coverageGaps = [];
 window.viewGaps = function () {
   openModal(`Biggest gaps (${coverageGaps.length})`, [], async () => {});
-  const list = coverageGaps.map((g) =>
-    `<div class="sumrow"><span>${esc(g.m)} › ${esc(g.s)}</span><span class="num">${g.ref}</span></div>`).join("");
+  const list = coverageGaps.map((g, i) =>
+    `<div class="sumrow gap-row" onclick="gapToCatalog(${i})" title="Show the competitor products in this gap">
+      <span>${esc(g.m)} › ${esc(g.s)}</span><span class="num">${g.ref}</span></div>`).join("");
   document.getElementById("modal-fields").innerHTML =
-    `<p class="muted">Categories competitors cover that your suppliers don't — the number is how many competitor products sit in that gap. Largest first.</p>`
+    `<p class="muted">Categories competitors cover that your suppliers don't — the number is how many competitor products sit in that gap. Click a row to see those products. Largest first.</p>`
     + `<div class="sum-table" style="max-height:60vh;overflow:auto">${list || '<p class="muted">No gaps. 🎉</p>'}</div>`;
   document.getElementById("modal-extra").innerHTML = "";
+};
+
+// Open the Catalog filtered to one gap's category, scoped to competitors (who
+// have products there) — so you can see exactly what defines the gap.
+window.gapToCatalog = async function (i) {
+  const g = coverageGaps[i];
+  if (!g) return;
+  closeModal();
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  document.querySelector('.tab[data-tab="catalog"]').classList.add("active");
+  document.getElementById("catalog").classList.add("active");
+  const $ = (id) => document.getElementById(id);
+  await loadCatalog();                          // ensure dropdown options exist
+  $("catalog-supplier-filter").value = "none";
+  $("catalog-competitor-filter").value = "all";
+  await loadCatalog();                          // master options now reflect competitors
+  $("catalog-master-filter").value = g.m;
+  await loadCatalog();                          // sub options now reflect that master
+  $("catalog-sub-filter").value = g.s;
+  await loadCatalog();
 };
 
 async function loadCoverage() {

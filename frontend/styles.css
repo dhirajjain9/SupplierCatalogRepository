@@ -372,6 +372,8 @@ table.attrs tr:last-child th, table.attrs tr:last-child td { border-bottom: none
 .card-l { color: var(--muted); font-size: 13px; margin-top: 2px; }
 .card.clickable { cursor: pointer; transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
 .card.clickable:hover { border-color: var(--accent); box-shadow: var(--shadow-md); }
+.sum-table .gap-row { cursor: pointer; border-radius: var(--radius-sm); }
+.sum-table .gap-row:hover { background: var(--accent-soft); }
 .gaps-box { margin-top: 18px; }
 .gaps-box h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
 .gap-chips { display: flex; flex-wrap: wrap; gap: 8px; }
