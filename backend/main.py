@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.database import get_db, init_db
 from backend.routers import (
-    analysis, catalog, documents, google, imports, maintenance, quotes, suppliers, translate, vision,
+    analysis, catalog, documents, export, google, imports, maintenance, quotes, suppliers, translate, vision,
 )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -61,6 +61,7 @@ app.include_router(analysis.router)
 app.include_router(google.router)
 app.include_router(translate.router)
 app.include_router(maintenance.router)
+app.include_router(export.router)
 
 
 @app.get("/api/health", tags=["health"])
