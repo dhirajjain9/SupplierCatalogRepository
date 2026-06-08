@@ -2633,5 +2633,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") document.querySelectorAll(".dropdown.open").forEach((d) => d.classList.remove("open"));
 });
 
+// Point the top-bar "Google Drive" link at the configured catalog folder, if set.
+fetch("/api/google/status").then((r) => r.json()).then((s) => {
+  const a = document.getElementById("drive-link-top");
+  if (a && s && s.drive_folder) a.href = `https://drive.google.com/drive/folders/${s.drive_folder}`;
+}).catch(() => {});
+
 loadSuppliers();
 refreshCounts();

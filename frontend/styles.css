@@ -82,6 +82,15 @@ body {
   padding: 16px var(--space);
 }
 .brand { display: flex; align-items: center; gap: 14px; max-width: 1180px; margin: 0 auto; }
+.drive-link {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 13px; border: 1px solid var(--border-strong); border-radius: var(--pill);
+  background: var(--surface); color: var(--text); font-size: 13px; font-weight: 500;
+  text-decoration: none; white-space: nowrap;
+  transition: background 0.18s var(--ease), border-color 0.18s var(--ease);
+}
+.drive-link:hover { background: var(--surface-2); border-color: var(--accent); }
+.drive-link svg { width: 16px; height: 16px; }
 .logo {
   width: 40px; height: 40px; flex: none;
   display: grid; place-items: center;
