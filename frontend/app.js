@@ -1326,22 +1326,18 @@ function goToSupplierCatalog(supplierId) {
   });
 }
 
-// Full AI flow: render -> extract per page (name + photo box) -> review ->
-// (on Save) persist rows, then crop each product's photo and attach it.
-async function runVisionFlow(file, supplier, renderSummary) {
-  showModalBusy("Rendering catalog pages…");
+// Render a PDF and AI-extract products from every page (parallel, page-ordered).
+// Returns { pageBlobs, rows, meta, detected, pagesWithProducts, erroredPages, lastError }.
+async function visionExtract(file, onProgress) {
   const pageBlobs = await renderPdfPages(file);
   const rows = []; const meta = []; let detected = null; let pagesWithProducts = 0;
   let erroredPages = 0; let lastError = null;
-  // Read pages in parallel (bounded) — each page is its own AI call, so doing
-  // them concurrently turns an N-page wait into roughly N/5. Results are kept
-  // per page index so rows/meta stay in page order afterward.
   const pageResults = new Array(pageBlobs.length);
-  showModalBusy(`Reading 0 of ${pageBlobs.length} pages with AI…`);
+  if (onProgress) onProgress(0, pageBlobs.length);
   await runPool(pageBlobs, async (blob, i) => {
     try { pageResults[i] = await visionExtractPage(blob); }
     catch (e) { pageResults[i] = { products: [] }; erroredPages++; lastError = e; }
-  }, 5, (n) => showModalBusy(`Reading ${n} of ${pageBlobs.length} pages with AI…`));
+  }, 5, (n) => onProgress && onProgress(n, pageBlobs.length));
   pageResults.forEach((res, i) => {
     if (!res) return;
     if (res.supplier_name && !detected) detected = res.supplier_name;
@@ -1349,78 +1345,94 @@ async function runVisionFlow(file, supplier, renderSummary) {
     found.forEach((p) => { rows.push(productToRow(p, i + 1)); meta.push({ pageIdx: i, box: p.box || null }); });
     if (found.length) pagesWithProducts++;
   });
+  return { pageBlobs, rows, meta, detected, pagesWithProducts, erroredPages, lastError };
+}
 
-  const supplierName = supplier.name || detected || file.name.replace(/\.pdf$/i, "");
-  if (!rows.length) {
-    // If every page errored, the problem is the AI service (e.g. an invalid/expired
-    // API key) — show the real error rather than the generic "nothing found".
-    const allFailed = erroredPages === pageBlobs.length && lastError;
+// Persist vision-extracted rows, then attach each page image + per-product crop.
+// Returns { summary, supId }.
+async function visionPersist(ex, supplier, supplierName, onProgress) {
+  const { rows, meta, pageBlobs } = ex;
+  const eff = { id: supplier.id || null, name: supplier.id ? null : supplierName, type: supplier.type };
+  const summary = await importRowsBatched("catalog-import/rows", eff, { rows, warnings: [] });
+  const ids = summary.item_ids || [];
+  const supId = await resolveSupplierId(supplier.id, supplierName);
+  const pageIdxs = [...new Set(rows.map((_, i) => (ids[i] ? meta[i].pageIdx : null)).filter((v) => v !== null))];
+  const cropByPage = {};
+  rows.forEach((_, i) => { if (ids[i] && meta[i].box) (cropByPage[meta[i].pageIdx] = cropByPage[meta[i].pageIdx] || []).push(i); });
+  const total = pageIdxs.length + Object.values(cropByPage).reduce((n, a) => n + a.length, 0);
+  let step = 0, pageImgs = 0, crops = 0;
+  // 1) One source-page image per page with products (guaranteed photo fallback).
+  await runPool(pageIdxs, async (pk) => {
+    const fd = new FormData();
+    fd.append("file", new File([pageBlobs[pk]], `page-${pk + 1}.jpg`, { type: "image/jpeg" }));
+    if (supId) fd.append("supplier_id", supId);
+    try { const r = await fetchWithTimeout("/api/documents", { method: "POST", body: fd }); if (r.ok) pageImgs++; }
+    catch { /* skip a stalled upload rather than freeze the import */ }
+  }, 5, () => onProgress && onProgress("Saving page images", ++step, total));
+  // 2) Tight per-product crops where the AI gave a box.
+  const cropTasks = []; const bitmaps = [];
+  for (const pk of Object.keys(cropByPage)) {
+    let bitmap;
+    try { bitmap = await createImageBitmap(pageBlobs[pk]); } catch (e) { continue; }
+    bitmaps.push(bitmap);
+    for (const i of cropByPage[pk]) cropTasks.push({ bitmap, i });
+  }
+  await runPool(cropTasks, async ({ bitmap, i }) => {
+    const blob = await cropToBlob(bitmap, meta[i].box);
+    if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) crops++;
+  }, 5, () => onProgress && onProgress("Cropping product photos", ++step, total));
+  bitmaps.forEach((b) => b.close && b.close());
+  summary.images_attached = (summary.images_attached || 0) + pageImgs + crops;
+  return { summary, supId };
+}
+
+// Headless image-only-PDF import (no review) — used by bulk Drive import so an
+// image PDF is handled automatically. Returns { found, summary }.
+async function visionImportHeadless(file, supplier, onProgress) {
+  const ex = await visionExtract(file, (n, t) => onProgress && onProgress(`reading page ${n}/${t}`));
+  if (!ex.rows.length) {
+    if (ex.erroredPages === ex.pageBlobs.length && ex.lastError) throw ex.lastError;
+    return { found: 0, summary: null };
+  }
+  const supplierName = supplier.name || ex.detected || (file.name || "catalog").replace(/\.pdf$/i, "");
+  const { summary } = await visionPersist(ex, supplier, supplierName,
+    (label, s, t) => onProgress && onProgress(`${label} ${s}/${t}`));
+  return { found: ex.rows.length, summary };
+}
+
+// Interactive AI flow: extract -> review -> (on Save) persist rows + photos.
+async function runVisionFlow(file, supplier, renderSummary) {
+  showModalBusy("Rendering catalog pages…");
+  const ex = await visionExtract(file, (n, t) => showModalBusy(`Reading ${n} of ${t} pages with AI…`));
+  const supplierName = supplier.name || ex.detected || file.name.replace(/\.pdf$/i, "");
+  if (!ex.rows.length) {
+    const allFailed = ex.erroredPages === ex.pageBlobs.length && ex.lastError;
     document.getElementById("modal-title").textContent = allFailed ? "AI extraction error" : "Nothing found";
     document.getElementById("modal-fields").innerHTML = allFailed
-      ? `<p>AI extraction failed on all ${pageBlobs.length} page(s).</p>`
-        + `<p class="errs">${esc(lastError.message)}</p>`
-        + `<p class="muted">If this mentions authentication or an API key, update `
-        + `<code>ANTHROPIC_API_KEY</code> in Vercel (the previous key may have been rotated).</p>`
+      ? `<p>AI extraction failed on all ${ex.pageBlobs.length} page(s).</p>`
+        + `<p class="errs">${esc(ex.lastError.message)}</p>`
+        + `<p class="muted">If this mentions authentication or an API key, update the AI key in Vercel.</p>`
       : `<p>The AI didn't find any products in this PDF — it may not be a product `
         + `catalog, or the pages are too low-resolution to read.`
-        + (erroredPages ? ` (${erroredPages} of ${pageBlobs.length} pages errored.)` : "") + `</p>`;
+        + (ex.erroredPages ? ` (${ex.erroredPages} of ${ex.pageBlobs.length} pages errored.)` : "") + `</p>`;
     setSaveLabel("Close"); onSubmit = async () => true;
     return;
   }
-
-  // Review step.
   document.getElementById("modal-title").textContent = "Review extracted products";
-  const list = rows.slice(0, 40).map((r) =>
+  const list = ex.rows.slice(0, 40).map((r) =>
     `<li>${esc(r.name)}${r.attributes.Material ? ` — <span class="muted">${esc(r.attributes.Material)}</span>` : ""}</li>`).join("");
-  const more = rows.length > 40 ? `<li>…and ${rows.length - 40} more</li>` : "";
+  const more = ex.rows.length > 40 ? `<li>…and ${ex.rows.length - 40} more</li>` : "";
   document.getElementById("modal-fields").innerHTML = `
-    <p><strong>${rows.length}</strong> product(s) found across ${pagesWithProducts} page(s),
+    <p><strong>${ex.rows.length}</strong> product(s) found across ${ex.pagesWithProducts} page(s),
        supplier <strong>${esc(supplierName)}</strong>.</p>
     <p class="muted">Review below, then save — each product's photo is cropped from its page.
        You can edit or delete items afterwards.</p>
     <ul class="errs">${list}${more}</ul>`;
-  setSaveLabel(`Save ${rows.length} products`);
-
+  setSaveLabel(`Save ${ex.rows.length} products`);
   onSubmit = async () => {
-    const eff = { id: supplier.id || null, name: supplier.id ? null : supplierName, type: supplier.type };
     showModalBusy("Saving products to the catalog…");
-    const summary = await importRowsBatched("catalog-import/rows", eff, { rows, warnings: [] });
-    const ids = summary.item_ids || [];
-    const supId = await resolveSupplierId(supplier.id, supplierName);
-
-    // Which work units we have: one page-image per page that has products, plus
-    // one crop per product that came back with a box.
-    const pageIdxs = [...new Set(rows.map((_, i) => (ids[i] ? meta[i].pageIdx : null)).filter((v) => v !== null))];
-    const cropByPage = {};
-    rows.forEach((_, i) => { if (ids[i] && meta[i].box) (cropByPage[meta[i].pageIdx] = cropByPage[meta[i].pageIdx] || []).push(i); });
-    const total = pageIdxs.length + Object.values(cropByPage).reduce((n, a) => n + a.length, 0);
-    let step = 0, pageImgs = 0, crops = 0;
-
-    // 1) Source page image per page (guaranteed fallback so every card has a photo).
-    await runPool(pageIdxs, async (pk) => {
-      const fd = new FormData();
-      fd.append("file", new File([pageBlobs[pk]], `page-${pk + 1}.jpg`, { type: "image/jpeg" }));
-      if (supId) fd.append("supplier_id", supId);
-      try { const r = await fetchWithTimeout("/api/documents", { method: "POST", body: fd }); if (r.ok) pageImgs++; }
-      catch { /* skip a stalled upload rather than freeze the import */ }
-    }, 5, () => showModalBusy(`Saving page images… (${++step}/${total})`));
-
-    // 2) Tight per-product crops where the AI gave a box. Decode each page's
-    // bitmap once, then crop + upload in parallel.
-    const cropTasks = []; const bitmaps = [];
-    for (const pk of Object.keys(cropByPage)) {
-      let bitmap;
-      try { bitmap = await createImageBitmap(pageBlobs[pk]); } catch (e) { continue; }
-      bitmaps.push(bitmap);
-      for (const i of cropByPage[pk]) cropTasks.push({ bitmap, i });
-    }
-    await runPool(cropTasks, async ({ bitmap, i }) => {
-      const blob = await cropToBlob(bitmap, meta[i].box);
-      if (blob && await uploadItemImage(ids[i], `${(rows[i].name || "item").slice(0, 40)}.jpg`, blob)) crops++;
-    }, 5, () => showModalBusy(`Cropping product photos… (${++step}/${total})`));
-    bitmaps.forEach((b) => b.close && b.close());
-    summary.images_attached = (summary.images_attached || 0) + pageImgs + crops;
-
+    const { summary, supId } = await visionPersist(ex, supplier, supplierName,
+      (label, s, t) => showModalBusy(`${label}… (${s}/${t})`));
     document.getElementById("modal-title").textContent = "Import Complete";
     document.getElementById("modal-fields").innerHTML = renderSummary(summary);
     document.getElementById("modal-extra").innerHTML = "";
@@ -1990,26 +2002,43 @@ async function driveImportSelected(files, forceType, fc) {
   const btn = fc.querySelector("#drive-import-btn");
   if (btn) btn.disabled = true;
   setModalBusy(true);
-  let done = 0, ok = 0, rows = 0, created = 0; const fails = [];
+  let done = 0, ok = 0, rows = 0, created = 0, vision = 0; const fails = [];
   await runPool(files, async (f) => {
     const stem = (f.filename || "file").replace(/\.[^.]+$/, "");
+    const supName = override || stem;
     try {
       const r = await postJsonRetry("/api/chat/import", {
         filename: f.filename, driveFileId: f.driveFileId, resourceName: f.resourceName || null,
-        supplier_name: override || stem, type: forceType,
+        supplier_name: supName, type: forceType,
       }, { timeoutMs: 120000, tries: 2 });
       ok++; rows += r.rows_captured || 0; created += r.items_created || 0;
     } catch (e) {
-      fails.push(`${f.filename}: ${e.message}`);
+      // Image-only PDF (no text rows) → fall back to the browser AI-vision engine
+      // automatically, so the same bulk action handles both kinds of file.
+      const isPdf = /\.pdf$/i.test(f.filename || "");
+      if (isPdf && /no rows found/i.test(e.message || "") && visionEnabled) {
+        try {
+          const file = await downloadChatFileChunked(f, f.filename || "catalog.pdf");
+          const res = await visionImportHeadless(file, { id: null, name: supName, type: forceType },
+            (msg) => { status.textContent = `${f.filename}: ${msg}`; });
+          if (res.found) { ok++; vision++; rows += res.summary.rows_captured || 0; created += res.summary.items_created || 0; }
+          else fails.push(`${f.filename}: AI vision found no products`);
+        } catch (ve) {
+          fails.push(`${f.filename}: ${ve.message}`);
+        }
+      } else {
+        fails.push(`${f.filename}: ${e.message}`);
+      }
     }
     done++;
     status.textContent = `Importing ${done}/${files.length}…`;
   }, 3);
   setModalBusy(false);
-  status.innerHTML = `<strong>${ok}/${files.length} file(s) imported</strong> — ${rows} rows, ${created} items created.`
+  status.innerHTML = `<strong>${ok}/${files.length} file(s) imported</strong> — ${rows} rows, ${created} items created`
+    + (vision ? ` (${vision} via AI vision)` : "") + "."
     + (fails.length
         ? `<div class="errs" style="margin-top:8px">${fails.length} failed:<ul>${fails.slice(0, 12).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
-          + `<p class="muted">Image-only PDFs and very large files (e.g. 300 MB+) can't be imported in bulk here — use “From Drive” on a single file for those.</p></div>`
+          + `<p class="muted">Very large files (e.g. 300 MB+) may still be too big to import in bulk — use “From Drive” on a single file for those.</p></div>`
         : "");
   loadSuppliers(); refreshCounts();
 }
