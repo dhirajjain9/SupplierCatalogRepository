@@ -2020,8 +2020,12 @@ async function driveImportSelected(files, forceType, fc) {
         try {
           const res = await visionImportDriveServer(f, { name: supName, type: forceType },
             (msg) => { status.textContent = `${f.filename}: ${msg}`; });
-          if (res.found) { ok++; vision++; created += res.found; }
-          else fails.push(`${f.filename}: AI vision found no products`);
+          if (res.found) {
+            ok++; vision++; created += res.found;
+            if (res.failedPages) fails.push(`${f.filename}: imported, but ${res.failedPages} page(s) were skipped — re-run to pick them up`);
+          } else {
+            fails.push(`${f.filename}: AI vision found no products`);
+          }
         } catch (ve) {
           fails.push(`${f.filename}: ${ve.message}`);
         }
@@ -2049,18 +2053,26 @@ async function visionImportDriveServer(f, supplier, onProgress) {
     driveFileId: f.driveFileId || null, resourceName: f.resourceName || null,
     filename: f.filename || "catalog.pdf", supplier_name: supplier.name || null, type: supplier.type,
   };
-  const first = await postJsonRetry("/api/vision/import-drive-page", { ...base, page: 0 }, { timeoutMs: 120000, tries: 2 });
+  // Page 0 also returns the page count. If this fails, the file genuinely can't
+  // be processed (bad key, not a PDF, etc.) so let it throw → file marked failed.
+  const first = await postJsonRetry("/api/vision/import-drive-page", { ...base, page: 0 }, { timeoutMs: 90000, tries: 2 });
   const n = first.page_count || 0;
-  let added = first.products_added || 0;
+  let added = first.products_added || 0, failedPages = 0, done = 1;
   if (n > 1) {
-    let done = 1;
+    // Each remaining page is independent: a slow/failing one is skipped (counted),
+    // never aborting the rest. Pages persist server-side as they succeed.
     await runPool(Array.from({ length: n - 1 }, (_, i) => i + 1), async (pg) => {
-      const r = await postJsonRetry("/api/vision/import-drive-page", { ...base, page: pg }, { timeoutMs: 120000, tries: 2 });
-      added += r.products_added || 0;
-      done++; onProgress && onProgress(`AI vision page ${done}/${n}`);
+      try {
+        const r = await postJsonRetry("/api/vision/import-drive-page", { ...base, page: pg }, { timeoutMs: 90000, tries: 2 });
+        added += r.products_added || 0;
+      } catch (e) {
+        failedPages++;
+      }
+      done++;
+      onProgress && onProgress(`AI vision page ${done}/${n}${failedPages ? ` · ${failedPages} skipped` : ""}`);
     }, 2);
   }
-  return { found: added, page_count: n };
+  return { found: added, page_count: n, failedPages };
 }
 
 // Pull a Chat attachment into the browser in byte-range slices, so files larger
