@@ -8,6 +8,7 @@ inspect and fix that without touching the imported catalog data itself.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from backend import models
 from backend.database import get_db
+from backend.services.storage import store_file
 
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
 
@@ -81,6 +83,40 @@ def dedupe_images(db: Session = Depends(get_db)) -> dict:
             removed += 1
     db.commit()
     return {"removed": removed}
+
+
+@router.post("/backfill-item-photos")
+def backfill_item_photos(db: Session = Depends(get_db)) -> dict:
+    """Give each product its own saved photo by copying its supplier's page image
+    (page-N.jpg) onto it, matched by the item's 'Source Page'. For catalogs that
+    were vision-imported before per-item photos were attached — no re-import."""
+    have = set(db.scalars(
+        select(models.Document.catalog_item_id)
+        .where(models.Document.kind == "image", models.Document.catalog_item_id.is_not(None))
+    ).all())
+    # Supplier-level page images, keyed by (supplier_id, page number as str).
+    pages: dict[tuple, models.Document] = {}
+    for d in db.scalars(select(models.Document).where(
+        models.Document.kind == "image",
+        models.Document.catalog_item_id.is_(None),
+        models.Document.supplier_id.is_not(None),
+    )).all():
+        m = re.match(r"page-(\d+)\.", d.filename or "", re.I)
+        if m and d.data is not None:
+            pages[(d.supplier_id, m.group(1))] = d
+    attached = 0
+    for it in db.scalars(select(models.CatalogItem)).all():
+        if it.id in have:
+            continue
+        sp = (it.attributes or {}).get("Source Page")
+        src = pages.get((it.supplier_id, str(sp))) if sp is not None else None
+        if src is None:
+            continue
+        db.add(store_file(src.data, f"item-{it.id}.jpg", src.content_type or "image/jpeg",
+                          supplier_id=it.supplier_id, catalog_item_id=it.id, kind="image"))
+        attached += 1
+    db.commit()
+    return {"attached": attached}
 
 
 class MergeSuppliersIn(BaseModel):

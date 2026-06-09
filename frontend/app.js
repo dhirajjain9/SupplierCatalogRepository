@@ -2651,6 +2651,27 @@ document.getElementById("cleanup-junk").addEventListener("click", () => {
   setSaveLabel("Scan");
 });
 
+// Give vision-imported items their own saved photo (copy of their page image),
+// for catalogs imported before per-item photos were attached.
+document.getElementById("backfill-photos").addEventListener("click", () => {
+  openModal("Attach page photos", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    await new Promise((r) => setTimeout(r, 0));
+    const r = await api.post("/api/maintenance/backfill-item-photos", {});
+    fields.innerHTML = r.attached
+      ? `<p><strong>Attached photos to ${r.attached} product(s).</strong> 🎉</p>`
+      : `<p>Nothing to backfill — items already have photos (or no page images found).</p>`;
+    setSaveLabel("Done"); onSubmit = async () => {};
+    loadCatalog(); refreshCounts();
+    return false;
+  });
+  document.getElementById("modal-fields").innerHTML =
+    `<p>Give products that came from an image-PDF their saved photo (a copy of the page
+        image they were extracted from). Use this for catalogs imported before photos
+        were attached per item.</p>`;
+  setSaveLabel("Attach photos");
+});
+
 // Clean up duplicate product photos (and surface duplicate suppliers) left by
 // repeated imports. Shows a report first, then removes only exact duplicates.
 document.getElementById("dedupe-images").addEventListener("click", () => {
