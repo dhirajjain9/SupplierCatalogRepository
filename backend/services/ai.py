@@ -18,9 +18,9 @@ class AINotConfigured(RuntimeError):
 
 
 def provider() -> str | None:
-    if os.environ.get("OPENAI_API_KEY"):
+    if (os.environ.get("OPENAI_API_KEY") or "").strip():
         return "openai"
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if (os.environ.get("ANTHROPIC_API_KEY") or "").strip():
         return "anthropic"
     return None
 
@@ -44,12 +44,14 @@ def vision_model() -> str:
 
 def _openai():
     from openai import OpenAI
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    # .strip() guards against a trailing space/newline pasted into the env var,
+    # which otherwise causes a confusing 401 'invalid_api_key'.
+    return OpenAI(api_key=os.environ["OPENAI_API_KEY"].strip())
 
 
 def _anthropic():
     import anthropic
-    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
 
 
 def _anthropic_text(message) -> str:
