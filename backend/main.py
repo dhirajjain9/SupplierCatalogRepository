@@ -89,6 +89,17 @@ def counts(db=Depends(get_db)) -> dict[str, int]:
 
 # Serve the single-page frontend. Mounted last so /api/* routes take priority.
 if os.path.isdir(FRONTEND_DIR):
+    # Make the browser/CDN revalidate the frontend assets on every load (cheap via
+    # ETag → 304 when unchanged) so a new deploy shows up immediately instead of a
+    # stale cached app.js/styles.css.
+    @app.middleware("http")
+    async def _revalidate_frontend(request, call_next):
+        resp = await call_next(request)
+        path = request.url.path
+        if path == "/" or path == "/favicon.ico" or path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
+
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
     @app.get("/", include_in_schema=False)
