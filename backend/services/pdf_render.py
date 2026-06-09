@@ -69,3 +69,33 @@ def render_page_jpeg(data: bytes, index: int, scale: float = 2.0,
         return out.getvalue()
     finally:
         pdf.close()
+
+
+def crop_jpeg(jpeg: bytes, box, quality: int = 85) -> bytes | None:
+    """Crop a product's photo from a rendered page JPEG using a normalized
+    [x0, y0, x1, y1] box (fractions of the page, or percentages). Returns None if
+    the box is missing/invalid or the crop is too small to be useful."""
+    if not box or len(box) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    from PIL import Image
+
+    if max(x0, y0, x1, y1) > 1.5:  # given as percentages
+        x0, y0, x1, y1 = x0 / 100, y0 / 100, x1 / 100, y1 / 100
+    im = Image.open(io.BytesIO(jpeg))
+    w, h = im.size
+    left = int(max(0.0, min(x0, x1)) * w)
+    top = int(max(0.0, min(y0, y1)) * h)
+    right = int(min(1.0, max(x0, x1)) * w)
+    bottom = int(min(1.0, max(y0, y1)) * h)
+    if right - left < 12 or bottom - top < 12:
+        return None
+    crop = im.crop((left, top, right, bottom))
+    if crop.mode != "RGB":
+        crop = crop.convert("RGB")
+    out = io.BytesIO()
+    crop.save(out, format="JPEG", quality=quality)
+    return out.getvalue()

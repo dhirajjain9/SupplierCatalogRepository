@@ -110,10 +110,18 @@ def import_drive_page(payload: DrivePageIn, db: Session = Depends(get_db)) -> di
 
     rows = [_vision_row(p, page + 1) for p in products]
     summary, _ = imp._persist_catalog(db, rows, [], default, created, source_type=payload.type)
-    # Store the rendered page image so every item on the page has a photo (the
-    # gallery maps page-N.jpg to items via their 'Source Page' attribute).
-    db.add(store_file(jpeg, f"page-{page + 1}.jpg", "image/jpeg",
-                      supplier_id=default.id, kind="image"))
+    # Attach a photo to each product: crop it from the page using the AI's box,
+    # else fall back to the whole page image — so every item has its own saved photo.
+    ids = summary.item_ids or []
+    imgs = 0
+    for i, p in enumerate(products):
+        iid = ids[i] if i < len(ids) else None
+        if not iid:
+            continue
+        crop = pdf_render.crop_jpeg(jpeg, p.get("box")) if p.get("box") else None
+        db.add(store_file(crop or jpeg, f"item-{iid}.jpg", "image/jpeg",
+                          supplier_id=default.id, catalog_item_id=iid, kind="image"))
+        imgs += 1
     db.commit()
     return {"page_count": n, "products_added": summary.items_created + summary.items_updated,
-            "supplier_id": default.id}
+            "images_added": imgs, "supplier_id": default.id}
