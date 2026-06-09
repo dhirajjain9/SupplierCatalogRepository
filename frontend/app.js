@@ -1942,15 +1942,19 @@ async function driveFlow(forceType) {
       <div id="drive-file-list" class="drive-files"></div>
       <div class="modal-foot" style="padding:12px 0 0">
         <span id="drive-import-status" class="muted"></span><span class="spacer"></span>
+        <button class="btn" id="drive-mark-btn" disabled title="Flag the ticked files as already imported (no import)">Mark imported</button>
         <button class="btn primary" id="drive-import-btn" disabled>Import selected</button>
       </div>`;
     const listEl = fc.querySelector("#drive-file-list");
     const btn = fc.querySelector("#drive-import-btn");
+    const markBtn = fc.querySelector("#drive-mark-btn");
     const fmtSize = (n) => !n ? "" : (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
     const fmtDate = (t) => { try { return t ? new Date(t).toLocaleDateString() : ""; } catch (e) { return ""; } };
+    const checked = () => [...listEl.querySelectorAll(".drive-chk:checked")].map((c) => files[+c.dataset.i]);
     const updateBtn = () => {
       const n = listEl.querySelectorAll(".drive-chk:checked").length;
       btn.disabled = !n; btn.textContent = n ? `Import ${n} selected` : "Import selected";
+      markBtn.disabled = !n;
     };
     const render = (term) => {
       const tl = (term || "").toLowerCase();
@@ -1981,9 +1985,16 @@ async function driveFlow(forceType) {
       updateBtn();
     });
     listEl.addEventListener("change", updateBtn);
-    btn.addEventListener("click", () => {
-      const chosen = [...listEl.querySelectorAll(".drive-chk:checked")].map((c) => files[+c.dataset.i]);
-      driveImportSelected(chosen, forceType, fc);
+    btn.addEventListener("click", () => driveImportSelected(checked(), forceType, fc));
+    markBtn.addEventListener("click", async () => {
+      const chosen = checked();
+      if (!chosen.length) return;
+      markBtn.disabled = true;
+      const r = await api.post("/api/drive/mark-imported", {
+        files: chosen.map((f) => ({ driveFileId: f.driveFileId, resourceName: f.resourceName, filename: f.filename })),
+      });
+      toast(`Marked ${r.marked} file(s) as already imported`);
+      loadFiles();  // re-render so the ✓ badges + counts update
     });
   };
   document.getElementById("drive-folder").addEventListener("change", loadFiles);

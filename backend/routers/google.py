@@ -190,3 +190,22 @@ def drive_imported(db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(models.ImportedFile)).all()
     return [{"file_id": r.file_id, "filename": r.filename, "rows": r.rows,
              "imported_at": r.imported_at.isoformat() if r.imported_at else None} for r in rows]
+
+
+class MarkImportedIn(BaseModel):
+    files: list[dict] = []  # each: {driveFileId?|resourceName?, filename?}
+
+
+@router.post("/drive/mark-imported")
+def drive_mark_imported(payload: MarkImportedIn, db: Session = Depends(get_db)) -> dict:
+    """Manually flag files as already-imported (one-time baseline for catalogs
+    ingested before the memory existed) without re-importing them."""
+    marked = 0
+    for f in payload.files:
+        fid = f.get("driveFileId") or f.get("resourceName")
+        if not fid:
+            continue
+        _remember_imported(db, fid, f.get("filename") or "file", 0)
+        marked += 1
+    db.commit()
+    return {"marked": marked}
