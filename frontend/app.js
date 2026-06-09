@@ -2052,22 +2052,42 @@ async function downloadChatFileChunked(f, filename) {
     const qs = new URLSearchParams({ filename, offset: String(offset), length: String(CHAT_CHUNK) });
     if (f.resourceName) qs.set("resourceName", f.resourceName);
     if (f.driveFileId) qs.set("driveFileId", f.driveFileId);
-    const res = await fetch(`/api/chat/download?${qs.toString()}`);
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || "Download failed"); }
-    const total = +(res.headers.get("X-Total-Size") || 0);
-    return { blob: await res.blob(), total };
+    // Each chunk gets a timeout + retries, so one stalled request can't hang the
+    // whole download forever (the symptom: stuck on the final chunk).
+    let lastErr;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const res = await fetchWithTimeout(`/api/chat/download?${qs.toString()}`, {}, 90000);
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Download failed (HTTP ${res.status})`); }
+        const total = +(res.headers.get("X-Total-Size") || 0);
+        return { blob: await res.blob(), total };
+      } catch (e) {
+        lastErr = e;
+        if (attempt < 3) {
+          showModalBusy(`Downloading ${filename}… retrying chunk at ${fmt(offset)} (${attempt + 1}/3)`);
+          await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        }
+      }
+    }
+    throw lastErr || new Error("Download failed");
   };
 
   const first = await fetchChunk(0);
   const parts = [first.blob];
   let got = first.blob.size;
   const total = first.total || got;
-  while (got < total) {
+  // Bounded loop: at most (size / chunk) + a small margin; break if a chunk adds
+  // nothing (no forward progress) so we can never spin forever.
+  const maxIters = Math.ceil(total / CHAT_CHUNK) + 3;
+  for (let i = 0; got < total && i < maxIters; i++) {
     showModalBusy(`Downloading ${filename}… ${fmt(got)} / ${fmt(total)}`);
     const next = await fetchChunk(got);
-    if (!next.blob.size) break;  // guard against a stall
+    if (!next.blob.size) break;  // guard against a stall / past-end read
     parts.push(next.blob);
     got += next.blob.size;
+  }
+  if (got < total) {
+    throw new Error(`Download stalled at ${fmt(got)} of ${fmt(total)} — the file may be too large or Drive timed out. Try again, or import this file on its own.`);
   }
   const type = first.blob.type || "application/octet-stream";
   return new File(parts, filename, { type });
