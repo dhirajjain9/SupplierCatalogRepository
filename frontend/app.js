@@ -236,7 +236,16 @@ function openModal(title, fields, handler, extraFooterHtml = "") {
     container.appendChild(wrap);
   });
   onSubmit = handler;
+  document.getElementById("modal-cancel").style.display = "";  // reset (viewers hide it)
   document.getElementById("modal-overlay").classList.remove("hidden");
+}
+
+// Turn the current modal into a read-only viewer: a single "Close" button (no
+// misleading "Save"/"Cancel" pair).
+function makeViewerModal() {
+  setSaveLabel("Close");
+  document.getElementById("modal-cancel").style.display = "none";
+  onSubmit = async () => {};
 }
 
 function closeModal() {
@@ -684,6 +693,7 @@ window.viewAttributes = function (id) {
   document.getElementById("modal-fields").innerHTML =
     `<table class="attrs"><tbody>${rows}</tbody></table>`;
   document.getElementById("modal-extra").innerHTML = "";
+  makeViewerModal();
 };
 
 window.viewImages = async function (id) {
@@ -698,6 +708,7 @@ window.viewImages = async function (id) {
     : `<p class="muted">No images yet. Use “Import Images” to attach photos by SKU.</p>`;
   document.getElementById("modal-fields").innerHTML = grid;
   document.getElementById("modal-extra").innerHTML = "";
+  makeViewerModal();
 };
 
 function itemFields(i = {}) {
