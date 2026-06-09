@@ -1482,6 +1482,12 @@ function openUploadModal({ title, kind, accept, fileLabel, renderSummary, extraF
         await runVisionFlow(file, supplier, renderSummary);
         return false;
       }
+      // No supplier from the form and none in the file → ask now, before the
+      // (slow) translate/import work, instead of failing at the very end.
+      if (kind === "catalog" && !supplier.id && !supplier.name
+          && !(parsed.rows || []).some((r) => r.supplier_name)) {
+        supplier.name = await askSupplierName(file.name.replace(/\.[^.]+$/, ""));
+      }
       if (kind === "catalog") await maybeTranslate(parsed);
       const action = kind === "catalog" ? "catalog-import/rows" : "quotation-import/rows";
       summary = await importRowsBatched(action, supplier, parsed);
@@ -1508,6 +1514,26 @@ function showModalBusy(msg) {
   document.getElementById("modal-fields").innerHTML =
     `<p class="muted">${esc(msg)} This can take a moment for large files.</p>`;
   document.getElementById("modal-extra").innerHTML = "";
+}
+
+// Ask for a supplier name inline (the file named none and none was chosen), so
+// we don't do all the parse/translate/import work and then fail. Resolves with a
+// non-empty name; keeps the dialog open and the already-parsed data intact.
+function askSupplierName(suggested) {
+  return new Promise((resolve) => {
+    const fields = document.getElementById("modal-fields");
+    fields.innerHTML = `
+      <p>This file doesn't name a supplier. Enter one to import everything under
+         (your file is already parsed — nothing is lost):</p>
+      <div class="field"><label>Supplier name</label>
+        <input id="ask-sup" value="${esc(suggested || "")}" placeholder="e.g. Acme Components" autocomplete="off" /></div>
+      <div style="margin-top:12px"><button type="button" class="btn primary" id="ask-sup-go">Continue import</button></div>`;
+    const input = fields.querySelector("#ask-sup");
+    input.focus(); input.select();
+    const go = () => { const v = (input.value || "").trim(); if (v) resolve(v); };
+    fields.querySelector("#ask-sup-go").addEventListener("click", go);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+  });
 }
 
 // Downscale/compress an image (raw bytes) to a small JPEG before upload, so a
@@ -2046,6 +2072,9 @@ async function importChatFile(f, forceType) {
       }
       await runVisionFlow(file, supplier, catalogSummaryHtml);  // takes over the modal
       return;
+    }
+    if (!supplier.id && !supplier.name && !(parsed.rows || []).some((r) => r.supplier_name)) {
+      supplier.name = await askSupplierName(filename.replace(/\.[^.]+$/, ""));
     }
     await maybeTranslate(parsed);
     const summary = await importRowsBatched("catalog-import/rows", supplier, parsed);
