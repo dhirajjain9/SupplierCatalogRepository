@@ -8,14 +8,15 @@ gaps can be computed.
 from __future__ import annotations
 
 import json
-import os
 
-from backend.services.vision import VisionNotConfigured, _parse_json, is_configured  # noqa: F401
+from backend.services import ai
+from backend.services.vision import VisionNotConfigured, _parse_json  # noqa: F401
 
-# Taxonomy work (deriving categories + classifying products) is text-only and
-# high-volume, so it defaults to the cheap model — NOT the Sonnet vision default.
-# Override with TAXONOMY_MODEL if you want a different one.
-DEFAULT_MODEL = os.environ.get("TAXONOMY_MODEL", "claude-haiku-4-5-20251001")
+is_configured = ai.is_configured
+
+# Active text model (OpenAI or Claude depending on which key is set). For Claude
+# this stays the cheap Haiku default via TAXONOMY_MODEL, not the Sonnet vision one.
+DEFAULT_MODEL = ai.text_model()
 
 TAXONOMY_SYSTEM = (
     "You build ONE consolidated, comparable 2-level taxonomy for a home/kitchen/"
@@ -42,30 +43,23 @@ CLASSIFY_SYSTEM = (
 )
 
 
-def _client():
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+def _require_configured() -> None:
+    if not ai.is_configured():
         raise VisionNotConfigured(
-            "AI isn't configured. Set ANTHROPIC_API_KEY on the server to enable "
-            "classification."
+            "AI isn't configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY on the "
+            "server to enable classification."
         )
-    import anthropic
-    return anthropic.Anthropic(api_key=api_key)
-
-
-def _text(message) -> str:
-    return "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
 
 
 def suggest_taxonomy(samples: list[str], model: str | None = None) -> dict:
     """Derive a master→sub taxonomy from a sample of product names/categories."""
-    client = _client()
+    _require_configured()
     sample = "\n".join(f"- {s}" for s in samples[:400] if s)
-    msg = client.messages.create(
-        model=model or DEFAULT_MODEL, max_tokens=1500, system=TAXONOMY_SYSTEM,
-        messages=[{"role": "user", "content": f"Products:\n{sample}\n\nReturn the taxonomy JSON."}],
+    text = ai.complete_text(
+        TAXONOMY_SYSTEM, f"Products:\n{sample}\n\nReturn the taxonomy JSON.",
+        max_tokens=1500, model=model,
     )
-    data = _parse_json(_text(msg))
+    data = _parse_json(text)
     cats = data.get("categories")
     return {"categories": cats if isinstance(cats, list) else []}
 
@@ -75,16 +69,16 @@ def classify_items(items: list[dict], taxonomy: dict, model: str | None = None) 
 
     ``items`` = [{"id", "name", "category"}]; returns [{"id","master","sub"}].
     """
-    client = _client()
+    _require_configured()
     tax = json.dumps(taxonomy.get("categories", []), ensure_ascii=False)
     lines = [{"id": it["id"], "name": it.get("name"), "category": it.get("category")} for it in items]
-    msg = client.messages.create(
-        model=model or DEFAULT_MODEL, max_tokens=4000, system=CLASSIFY_SYSTEM,
-        messages=[{"role": "user", "content":
-                   f"Taxonomy:\n{tax}\n\nProducts (JSON):\n{json.dumps(lines, ensure_ascii=False)}\n\n"
-                   "Classify every product. Return the JSON."}],
+    text = ai.complete_text(
+        CLASSIFY_SYSTEM,
+        f"Taxonomy:\n{tax}\n\nProducts (JSON):\n{json.dumps(lines, ensure_ascii=False)}\n\n"
+        "Classify every product. Return the JSON.",
+        max_tokens=4000, model=model,
     )
-    data = _parse_json(_text(msg))
+    data = _parse_json(text)
     out = []
     for r in data.get("items", []):
         if isinstance(r, dict) and "id" in r:

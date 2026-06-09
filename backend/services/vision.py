@@ -7,11 +7,12 @@ The API key stays server-side (never shipped to the browser).
 """
 from __future__ import annotations
 
-import base64
 import json
-import os
 
-DEFAULT_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-4-6")
+from backend.services import ai
+
+# Active vision model (OpenAI or Claude depending on which key is set).
+DEFAULT_MODEL = ai.vision_model()
 
 SYSTEM_PROMPT = (
     "You read a single page from a product catalog/brochure and return its "
@@ -40,11 +41,11 @@ USER_PROMPT = "Extract the products from this catalog page as JSON per the rules
 
 
 class VisionNotConfigured(RuntimeError):
-    """Raised when no ANTHROPIC_API_KEY is available."""
+    """Raised when no AI key is available."""
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return ai.is_configured()
 
 
 def _parse_json(text: str) -> dict:
@@ -69,28 +70,12 @@ def _parse_json(text: str) -> dict:
 
 
 def extract_products(image_bytes: bytes, media_type: str = "image/jpeg", model: str | None = None) -> dict:
-    """Send one page image to Claude and return {page_type, supplier_name, products}."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    """Send one page image to the AI and return {page_type, supplier_name, products}."""
+    if not ai.is_configured():
         raise VisionNotConfigured(
-            "AI extraction isn't configured. Set the ANTHROPIC_API_KEY environment "
-            "variable on the server to enable image-catalog import."
+            "AI extraction isn't configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY "
+            "on the server to enable image-catalog import."
         )
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
-    b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-    message = client.messages.create(
-        model=model or DEFAULT_MODEL,
-        max_tokens=2048,
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                {"type": "text", "text": USER_PROMPT},
-            ],
-        }],
-    )
-    text = "".join(block.text for block in message.content if getattr(block, "type", None) == "text")
+    text = ai.complete_vision(SYSTEM_PROMPT, USER_PROMPT, image_bytes,
+                              media_type=media_type, max_tokens=2048, model=model)
     return _parse_json(text)

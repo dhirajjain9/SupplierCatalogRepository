@@ -8,9 +8,11 @@ english} map. The API key stays server-side.
 from __future__ import annotations
 
 import json
-import os
 
-DEFAULT_MODEL = os.environ.get("TRANSLATE_MODEL", "claude-haiku-4-5-20251001")
+from backend.services import ai
+
+# Active text model (OpenAI or Claude depending on which key is set).
+DEFAULT_MODEL = ai.text_model()
 
 SYSTEM_PROMPT = (
     "You translate short product-catalog phrases (names, categories, materials, "
@@ -29,7 +31,7 @@ class TranslateNotConfigured(RuntimeError):
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return ai.is_configured()
 
 
 def _parse_array(text: str, n: int) -> list[str]:
@@ -51,23 +53,14 @@ def _parse_array(text: str, n: int) -> list[str]:
 
 def translate(texts: list[str], model: str | None = None) -> list[str]:
     """Translate a batch of strings; returns a list aligned to the input."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    if not ai.is_configured():
         raise TranslateNotConfigured(
-            "Translation isn't configured. Set ANTHROPIC_API_KEY on the server."
+            "Translation isn't configured. Set OPENAI_API_KEY or ANTHROPIC_API_KEY on the server."
         )
     if not texts:
         return []
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
-        model=model or DEFAULT_MODEL,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": json.dumps(texts, ensure_ascii=False)}],
-    )
-    text = "".join(b.text for b in message.content if getattr(b, "type", None) == "text")
+    text = ai.complete_text(SYSTEM_PROMPT, json.dumps(texts, ensure_ascii=False),
+                            max_tokens=4096, model=model)
     out = _parse_array(text, len(texts))
     # Fall back to the original where the model dropped/short-changed an entry.
     if len(out) < len(texts):

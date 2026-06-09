@@ -51,17 +51,18 @@ is an isolated change — ask and it can be added.
 Also use Vercel Postgres' **pooled** connection string (the default `POSTGRES_URL`)
 since serverless functions open many short-lived connections.
 
-## AI extraction for image-only catalogs (optional)
-Some supplier catalogs are **image-only PDFs** (slide/brochure exports with no
-text layer). These can't be parsed as text, so the app reads them with Claude
-vision instead. To enable it:
+## AI features & provider (optional)
+Translation, category curation/classification, and image-only-PDF vision all use
+an LLM. The app supports **OpenAI or Anthropic** — set whichever key you have:
 
-1. Get an **Anthropic API key** (https://console.anthropic.com).
-2. In Vercel → your project → **Settings → Environment Variables**, add:
-   - `ANTHROPIC_API_KEY` = your key
-   - *(optional)* `VISION_MODEL` = `claude-sonnet-4-6` (default; set
-     `claude-haiku-4-5-20251001` for lower cost, `claude-opus-4-8` for best accuracy)
-3. **Redeploy.**
+- **`OPENAI_API_KEY`** → uses OpenAI (preferred when set).
+  - *(optional)* `OPENAI_TEXT_MODEL` = `gpt-4o-mini` (default; translate/classify/curate)
+  - *(optional)* `OPENAI_VISION_MODEL` = `gpt-4o-mini` (default; set `gpt-4o` for best vision accuracy)
+- **`ANTHROPIC_API_KEY`** → uses Claude (used when no OpenAI key).
+  - *(optional)* `VISION_MODEL` = `claude-sonnet-4-6` (default), `TAXONOMY_MODEL` = `claude-haiku-4-5-20251001`
+
+Set the key in Vercel → **Settings → Environment Variables**, then **Redeploy**.
+If both keys are set, **OpenAI wins**.
 
 Then **Import Catalog** with an image PDF: the app renders each page, the AI
 extracts the products (name, specification, color, material, features) and the

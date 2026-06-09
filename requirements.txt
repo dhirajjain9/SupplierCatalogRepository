@@ -5,7 +5,8 @@ SQLAlchemy>=2.0
 psycopg[binary]>=3.1   # PostgreSQL driver (shared storage on Vercel)
 pydantic>=2.6
 python-multipart>=0.0.9
-anthropic>=0.40   # Claude vision extraction for image-only catalogs
+anthropic>=0.40   # Claude provider (translation, taxonomy, vision)
+openai>=1.40      # OpenAI provider — used when OPENAI_API_KEY is set
 # Catalog import parsing
 openpyxl>=3.1      # .xlsx
 pdfplumber>=0.11   # .pdf table extraction

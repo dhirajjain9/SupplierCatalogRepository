@@ -101,8 +101,9 @@ function failureReason(err, failedCount) {
 // add a pointed hint.
 function apiKeyHintIf(allFailed) {
   return allFailed
-    ? `<p class="muted">All batches failed — this usually means the server's <code>ANTHROPIC_API_KEY</code> `
-      + `is invalid/expired, out of credit, or rate-limited. Check the key and billing in Vercel.</p>`
+    ? `<p class="muted">All batches failed — this usually means the server's AI key `
+      + `(<code>OPENAI_API_KEY</code> or <code>ANTHROPIC_API_KEY</code>) is invalid/expired, out of `
+      + `credit, or rate-limited. Check the key and billing in Vercel.</p>`
     : "";
 }
 
