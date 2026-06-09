@@ -1873,13 +1873,69 @@ async function driveFlow(forceType) {
     catch (e) { fc.innerHTML = `<p class="errs">${esc(e.message)}</p>`; return; }
     try { localStorage.setItem("driveFolder", folder); } catch (e) {}  // remember last-used
     if (!files.length) { fc.innerHTML = `<p class="muted">No files in this folder.</p>`; return; }
+
+    // Which files were already imported, so we can flag them and skip re-importing.
+    let importedSet = new Set();
+    try { (await api.get("/api/drive/imported")).forEach((r) => importedSet.add(r.file_id)); } catch (e) {}
+    const isImported = (f) => importedSet.has(f.driveFileId) || importedSet.has(f.resourceName);
+    const newCount = files.filter((f) => !isImported(f)).length;
+
+    // Searchable, checkbox file list — tick several and import them all (each is
+    // downloaded + parsed + saved on the backend). Already-imported files are
+    // flagged and excluded from "Select all".
     fc.innerHTML = `
-      <div class="field"><label>File</label>
-        <select id="chat-file">${files.map((f, i) =>
-          `<option value="${i}">${esc(f.filename || "file")}</option>`).join("")}</select></div>
-      <button class="btn primary" id="chat-import-btn">Import selected file</button>`;
-    fc.querySelector("#chat-import-btn").addEventListener("click", () =>
-      importChatFile(files[+document.getElementById("chat-file").value], forceType));
+      <div class="field"><label>Files (${files.length} · ${newCount} not yet imported)</label>
+        <input type="search" id="drive-file-search" placeholder="Filter files…" autocomplete="off" /></div>
+      <label class="muted" style="display:inline-block;margin:2px 12px 6px 0">
+        <input type="checkbox" id="drive-all"> Select all new</label>
+      <label class="muted" style="display:inline-block;margin:2px 0 6px">
+        <input type="checkbox" id="drive-hide-done"> Hide already-imported</label>
+      <div id="drive-file-list" class="drive-files"></div>
+      <div class="modal-foot" style="padding:12px 0 0">
+        <span id="drive-import-status" class="muted"></span><span class="spacer"></span>
+        <button class="btn primary" id="drive-import-btn" disabled>Import selected</button>
+      </div>`;
+    const listEl = fc.querySelector("#drive-file-list");
+    const btn = fc.querySelector("#drive-import-btn");
+    const fmtSize = (n) => !n ? "" : (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+    const fmtDate = (t) => { try { return t ? new Date(t).toLocaleDateString() : ""; } catch (e) { return ""; } };
+    const updateBtn = () => {
+      const n = listEl.querySelectorAll(".drive-chk:checked").length;
+      btn.disabled = !n; btn.textContent = n ? `Import ${n} selected` : "Import selected";
+    };
+    const render = (term) => {
+      const tl = (term || "").toLowerCase();
+      const hideDone = fc.querySelector("#drive-hide-done").checked;
+      const shown = files.map((f, i) => ({ f, i }))
+        .filter(({ f }) => !tl || (f.filename || "").toLowerCase().includes(tl))
+        .filter(({ f }) => !(hideDone && isImported(f)));
+      listEl.innerHTML = shown.length ? shown.map(({ f, i }) => {
+        const done = isImported(f);
+        const meta = [fmtDate(f.time), fmtSize(f.size)].filter(Boolean).join(" · ");
+        return `<label class="drive-file-row${done ? " done" : ""}">
+          <input type="checkbox" class="drive-chk" data-i="${i}">
+          <span class="dfr-name">${esc(f.filename || "file")}</span>
+          ${done ? `<span class="dfr-badge">✓ imported</span>` : ""}
+          <span class="dfr-meta muted">${meta}</span>
+        </label>`;
+      }).join("") : `<p class="muted">No files match.</p>`;
+      updateBtn();
+    };
+    render("");
+    fc.querySelector("#drive-file-search").addEventListener("input", (e) => render(e.target.value));
+    fc.querySelector("#drive-hide-done").addEventListener("change", () => render(fc.querySelector("#drive-file-search").value));
+    fc.querySelector("#drive-all").addEventListener("change", (e) => {
+      // "Select all new" only ticks files that haven't been imported yet.
+      listEl.querySelectorAll(".drive-chk").forEach((c) => {
+        c.checked = e.target.checked && !isImported(files[+c.dataset.i]);
+      });
+      updateBtn();
+    });
+    listEl.addEventListener("change", updateBtn);
+    btn.addEventListener("click", () => {
+      const chosen = [...listEl.querySelectorAll(".drive-chk:checked")].map((c) => files[+c.dataset.i]);
+      driveImportSelected(chosen, forceType, fc);
+    });
   };
   document.getElementById("drive-folder").addEventListener("change", loadFiles);
   let deb; document.getElementById("drive-link").addEventListener("input", () => {
@@ -1894,6 +1950,42 @@ async function driveFlow(forceType) {
     else document.getElementById("drive-link").value = def;
     loadFiles();
   }
+}
+
+// Import several Drive files at once: each is downloaded + parsed + saved on the
+// backend (/api/chat/import), a few in parallel, with live progress. The dialog
+// is locked while it runs. Each file lands under a supplier named after the file
+// (unless its own Supplier column or the optional name override says otherwise).
+async function driveImportSelected(files, forceType, fc) {
+  if (!files.length) return;
+  const supOverride = (document.getElementById("chat-supname") || {}).value;
+  const override = (supOverride || "").trim();
+  const status = fc.querySelector("#drive-import-status");
+  const btn = fc.querySelector("#drive-import-btn");
+  if (btn) btn.disabled = true;
+  setModalBusy(true);
+  let done = 0, ok = 0, rows = 0, created = 0; const fails = [];
+  await runPool(files, async (f) => {
+    const stem = (f.filename || "file").replace(/\.[^.]+$/, "");
+    try {
+      const r = await postJsonRetry("/api/chat/import", {
+        filename: f.filename, driveFileId: f.driveFileId, resourceName: f.resourceName || null,
+        supplier_name: override || stem, type: forceType,
+      }, { timeoutMs: 120000, tries: 2 });
+      ok++; rows += r.rows_captured || 0; created += r.items_created || 0;
+    } catch (e) {
+      fails.push(`${f.filename}: ${e.message}`);
+    }
+    done++;
+    status.textContent = `Importing ${done}/${files.length}…`;
+  }, 3);
+  setModalBusy(false);
+  status.innerHTML = `<strong>${ok}/${files.length} file(s) imported</strong> — ${rows} rows, ${created} items created.`
+    + (fails.length
+        ? `<div class="errs" style="margin-top:8px">${fails.length} failed:<ul>${fails.slice(0, 12).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`
+          + `<p class="muted">Image-only PDFs and very large files (e.g. 300 MB+) can't be imported in bulk here — use “From Drive” on a single file for those.</p></div>`
+        : "");
+  loadSuppliers(); refreshCounts();
 }
 
 // Pull a Chat attachment into the browser in byte-range slices, so files larger

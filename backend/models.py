@@ -130,6 +130,20 @@ class Document(Base):
     catalog_item: Mapped["CatalogItem | None"] = relationship(back_populates="documents")
 
 
+class ImportedFile(Base):
+    """Remembers files already imported from an external source (Google Drive /
+    Chat) so the picker can flag them and avoid duplicate effort. Keyed by the
+    source's file id."""
+    __tablename__ = "imported_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="drive", index=True)
+    file_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    filename: Mapped[str | None] = mapped_column(String(300))
+    rows: Mapped[int] = mapped_column(Integer, default=0)
+    imported_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class OAuthToken(Base):
     """Stored Google OAuth tokens (single-user owner integration, e.g. Google Chat)."""
     __tablename__ = "oauth_tokens"

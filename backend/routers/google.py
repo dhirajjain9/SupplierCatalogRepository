@@ -1,14 +1,16 @@
 """OAuth + Google Chat browse/import endpoints (single-user owner integration)."""
 from __future__ import annotations
 
+import datetime as _dt
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend import schemas
+from backend import models, schemas
 from backend.database import get_db
 from backend.routers import imports as imp
 from backend.services import catalog_import, google
@@ -165,5 +167,26 @@ def chat_import(payload: ChatImport, db: Session = Depends(get_db)) -> schemas.I
     default, created = imp._form_default_supplier(db, payload.supplier_id, payload.supplier_name, payload.type)
     summary, row_to_item = imp._persist_catalog(db, result.rows, result.warnings, default, created, source_type=payload.type)
     summary.images_attached += imp._attach_image_urls(db, row_to_item)
+    _remember_imported(db, payload.driveFileId or payload.resourceName, name, summary.rows_captured)
     db.commit()
     return summary
+
+
+def _remember_imported(db: Session, file_id: str | None, filename: str, rows: int) -> None:
+    """Record (or refresh) that this external file was imported, so the picker can
+    flag it and the user doesn't re-import it by mistake."""
+    if not file_id:
+        return
+    row = db.scalar(select(models.ImportedFile).where(models.ImportedFile.file_id == file_id))
+    if row is None:
+        db.add(models.ImportedFile(source="drive", file_id=file_id, filename=filename, rows=rows or 0))
+    else:
+        row.filename, row.rows, row.imported_at = filename, rows or 0, _dt.datetime.utcnow()
+
+
+@router.get("/drive/imported")
+def drive_imported(db: Session = Depends(get_db)) -> list[dict]:
+    """File ids already imported (so the picker can mark them)."""
+    rows = db.scalars(select(models.ImportedFile)).all()
+    return [{"file_id": r.file_id, "filename": r.filename, "rows": r.rows,
+             "imported_at": r.imported_at.isoformat() if r.imported_at else None} for r in rows]

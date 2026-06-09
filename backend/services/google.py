@@ -233,6 +233,7 @@ def list_drive_files(db: Session, folder_id: str, limit: int = 300) -> list[dict
             out.append({
                 "driveFileId": f.get("id"), "filename": f.get("name") or "file",
                 "contentType": f.get("mimeType"), "time": f.get("modifiedTime"),
+                "size": int(f["size"]) if str(f.get("size") or "").isdigit() else None,
                 "resourceName": None,
             })
         page = data.get("nextPageToken")
