@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
+from backend.routers import google as gr
 from backend.routers import imports as imp
 from backend.services import catalog_import, google, pdf_render, vision
 from backend.services.storage import store_file
@@ -104,6 +105,9 @@ def import_drive_page(payload: DrivePageIn, db: Session = Depends(get_db)) -> di
     sup_name = (payload.supplier_name or "").strip() or result.get("supplier_name") \
         or (payload.filename or "Catalog").rsplit(".", 1)[0]
     default, created = imp._form_default_supplier(db, None, sup_name, payload.type)
+    # Remember this Drive file as ingested so the picker flags it (page 0 records
+    # it even if a page has no products; later pages just refresh the entry).
+    gr._remember_imported(db, file_id, payload.filename or "catalog.pdf", len(products))
     if not products or default is None:
         db.commit()
         return {"page_count": n, "products_added": 0, "supplier_id": default.id if default else None}
