@@ -10,4 +10,5 @@ openai>=1.40      # OpenAI provider — used when OPENAI_API_KEY is set
 # Catalog import parsing
 openpyxl>=3.1      # .xlsx
 pdfplumber>=0.11   # .pdf table extraction
+pypdfium2>=4.0     # server-side PDF page rasterisation (image-only-PDF vision import)
 Pillow>=10.0       # image handling (also a pdfplumber dependency)

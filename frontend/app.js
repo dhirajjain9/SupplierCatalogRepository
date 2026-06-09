@@ -2013,15 +2013,14 @@ async function driveImportSelected(files, forceType, fc) {
       }, { timeoutMs: 120000, tries: 2 });
       ok++; rows += r.rows_captured || 0; created += r.items_created || 0;
     } catch (e) {
-      // Image-only PDF (no text rows) → fall back to the browser AI-vision engine
-      // automatically, so the same bulk action handles both kinds of file.
+      // Image-only PDF (no text rows) → render + AI-extract it entirely on the
+      // server, one page at a time (no browser download to stall on).
       const isPdf = /\.pdf$/i.test(f.filename || "");
       if (isPdf && /no rows found/i.test(e.message || "") && visionEnabled) {
         try {
-          const file = await downloadChatFileChunked(f, f.filename || "catalog.pdf");
-          const res = await visionImportHeadless(file, { id: null, name: supName, type: forceType },
+          const res = await visionImportDriveServer(f, { name: supName, type: forceType },
             (msg) => { status.textContent = `${f.filename}: ${msg}`; });
-          if (res.found) { ok++; vision++; rows += res.summary.rows_captured || 0; created += res.summary.items_created || 0; }
+          if (res.found) { ok++; vision++; created += res.found; }
           else fails.push(`${f.filename}: AI vision found no products`);
         } catch (ve) {
           fails.push(`${f.filename}: ${ve.message}`);
@@ -2041,6 +2040,27 @@ async function driveImportSelected(files, forceType, fc) {
           + `<p class="muted">Very large files (e.g. 300 MB+) may still be too big to import in bulk — use “From Drive” on a single file for those.</p></div>`
         : "");
   loadSuppliers(); refreshCounts();
+}
+
+// Server-side image-PDF import: the server downloads + renders + AI-reads each
+// page (no browser download to stall on). The browser just drives the page loop.
+async function visionImportDriveServer(f, supplier, onProgress) {
+  const base = {
+    driveFileId: f.driveFileId || null, resourceName: f.resourceName || null,
+    filename: f.filename || "catalog.pdf", supplier_name: supplier.name || null, type: supplier.type,
+  };
+  const first = await postJsonRetry("/api/vision/import-drive-page", { ...base, page: 0 }, { timeoutMs: 120000, tries: 2 });
+  const n = first.page_count || 0;
+  let added = first.products_added || 0;
+  if (n > 1) {
+    let done = 1;
+    await runPool(Array.from({ length: n - 1 }, (_, i) => i + 1), async (pg) => {
+      const r = await postJsonRetry("/api/vision/import-drive-page", { ...base, page: pg }, { timeoutMs: 120000, tries: 2 });
+      added += r.products_added || 0;
+      done++; onProgress && onProgress(`AI vision page ${done}/${n}`);
+    }, 2);
+  }
+  return { found: added, page_count: n };
 }
 
 // Pull a Chat attachment into the browser in byte-range slices, so files larger

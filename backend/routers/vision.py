@@ -7,9 +7,14 @@ saves via the normal /api/catalog-import/rows endpoint.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from backend.services import vision
+from backend.database import get_db
+from backend.routers import imports as imp
+from backend.services import catalog_import, google, pdf_render, vision
+from backend.services.storage import store_file
 
 router = APIRouter(prefix="/api/vision", tags=["vision"])
 
@@ -31,3 +36,84 @@ async def vision_extract(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
     except Exception as exc:  # surface provider errors as a clean message
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"AI extraction failed: {exc}")
+
+
+class DrivePageIn(BaseModel):
+    driveFileId: str | None = None
+    resourceName: str | None = None
+    filename: str | None = None
+    supplier_name: str | None = None
+    type: str | None = None
+    page: int = 0  # 0-based page to render + extract + persist
+
+
+def _vision_row(p: dict, page_no: int) -> catalog_import.ParsedRow:
+    attrs = {}
+    for k, label in (("specification", "Specification"), ("color", "Color"),
+                     ("material", "Material"), ("features", "Features"),
+                     ("usage_scenario", "Usage Scenario")):
+        if p.get(k):
+            attrs[label] = str(p[k])
+    attrs["Source Page"] = str(page_no)
+    return catalog_import.ParsedRow(
+        name=p.get("name") or "Item", category=p.get("category") or None,
+        description=p.get("features") or None, attributes=attrs, source_row=page_no,
+    )
+
+
+@router.post("/import-drive-page")
+def import_drive_page(payload: DrivePageIn, db: Session = Depends(get_db)) -> dict:
+    """Server-side image-PDF import, one page at a time — no browser download.
+
+    Downloads the PDF from Drive (cached in /tmp), renders the requested page,
+    runs AI vision, and persists that page's products. The rendered page image is
+    stored as the supplier's page photo (the catalog thumbnails fall back to it by
+    'Source Page'). Returns the page count so the browser can drive the loop."""
+    if not vision.is_configured():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "AI vision isn't configured (set OPENAI_API_KEY or ANTHROPIC_API_KEY).")
+    file_id = payload.driveFileId or payload.resourceName or ""
+    data = pdf_render.cached_pdf(file_id)
+    if data is None:
+        try:
+            data = google.download_attachment(db, payload.resourceName, payload.driveFileId)
+        except google.NotConnected as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+        except Exception as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't download the file: {exc}")
+        pdf_render.cache_pdf(file_id, data)
+
+    try:
+        n = pdf_render.page_count(data)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Couldn't read the PDF: {exc}")
+
+    page = payload.page
+    if page < 0 or page >= n:
+        return {"page_count": n, "products_added": 0, "supplier_id": None}
+
+    try:
+        jpeg = pdf_render.render_page_jpeg(data, page)
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Couldn't render page {page + 1}: {exc}")
+    try:
+        result = vision.extract_products(jpeg, "image/jpeg")
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"AI extraction failed: {exc}")
+
+    products = [p for p in (result.get("products") or []) if p and p.get("name")]
+    sup_name = (payload.supplier_name or "").strip() or result.get("supplier_name") \
+        or (payload.filename or "Catalog").rsplit(".", 1)[0]
+    default, created = imp._form_default_supplier(db, None, sup_name, payload.type)
+    if not products or default is None:
+        db.commit()
+        return {"page_count": n, "products_added": 0, "supplier_id": default.id if default else None}
+
+    rows = [_vision_row(p, page + 1) for p in products]
+    summary, _ = imp._persist_catalog(db, rows, [], default, created, source_type=payload.type)
+    # Store the rendered page image so every item on the page has a photo (the
+    # gallery maps page-N.jpg to items via their 'Source Page' attribute).
+    db.add(store_file(jpeg, f"page-{page + 1}.jpg", "image/jpeg",
+                      supplier_id=default.id, kind="image"))
+    db.commit()
+    return {"page_count": n, "products_added": summary.items_created + summary.items_updated,
+            "supplier_id": default.id}

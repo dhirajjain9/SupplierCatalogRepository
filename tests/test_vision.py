@@ -45,3 +45,10 @@ def test_extract_endpoint_returns_products(client, monkeypatch):
                     files={"file": ("page.jpg", b"\xff\xd8\xff", "image/jpeg")}).json()
     assert r["supplier_name"] == "Suzhou Better Clean"
     assert r["products"][0]["name"] == "3M Cloth"
+
+
+def test_import_drive_page_requires_ai_key(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    r = client.post("/api/vision/import-drive-page", json={"driveFileId": "abc", "page": 0})
+    assert r.status_code == 400
