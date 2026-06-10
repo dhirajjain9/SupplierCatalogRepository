@@ -330,6 +330,25 @@ def _attach_image_urls(db: Session, row_to_item: dict[int, models.CatalogItem]) 
     return stored
 
 
+def _attach_xlsx_images(db: Session, filename: str | None, data: bytes,
+                        row_to_item: dict[int, models.CatalogItem]) -> int:
+    """Attach images embedded in an .xlsx to the items on their anchor rows.
+    Shared by the file-upload and the Drive/Chat import paths. Returns the count."""
+    if not (filename or "").lower().endswith(".xlsx"):
+        return 0
+    attached = 0
+    for img in images.extract_xlsx_images(data):
+        item = row_to_item.get(img.source_row or -1)
+        if item is None:
+            continue
+        db.add(store_file(
+            img.data, img.filename, img.content_type,
+            supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
+        ))
+        attached += 1
+    return attached
+
+
 def _run_catalog_import(
     db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None,
     suppliers_pre_created: int = 0,
@@ -338,16 +357,7 @@ def _run_catalog_import(
     summary, row_to_item = _persist_catalog(
         db, result.rows, result.warnings, default_supplier, suppliers_pre_created
     )
-    if (file.filename or "").lower().endswith(".xlsx"):
-        for img in images.extract_xlsx_images(data):
-            item = row_to_item.get(img.source_row or -1)
-            if item is None:
-                continue
-            db.add(store_file(
-                img.data, img.filename, img.content_type,
-                supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image",
-            ))
-            summary.images_attached += 1
+    summary.images_attached += _attach_xlsx_images(db, file.filename, data, row_to_item)
     summary.images_attached += _attach_image_urls(db, row_to_item)
     db.commit()
     return summary

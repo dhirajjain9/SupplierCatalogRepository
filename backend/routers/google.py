@@ -166,6 +166,7 @@ def chat_import(payload: ChatImport, db: Session = Depends(get_db)) -> schemas.I
         )
     default, created = imp._form_default_supplier(db, payload.supplier_id, payload.supplier_name, payload.type)
     summary, row_to_item = imp._persist_catalog(db, result.rows, result.warnings, default, created, source_type=payload.type)
+    summary.images_attached += imp._attach_xlsx_images(db, name, data, row_to_item)
     summary.images_attached += imp._attach_image_urls(db, row_to_item)
     _remember_imported(db, payload.driveFileId or payload.resourceName, name, summary.rows_captured)
     db.commit()
