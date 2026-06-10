@@ -119,6 +119,84 @@ def backfill_item_photos(db: Session = Depends(get_db)) -> dict:
     return {"attached": attached}
 
 
+@router.post("/backfill-pdf-photos")
+def backfill_pdf_photos(db: Session = Depends(get_db)) -> dict:
+    """Re-fetch each imported PDF from Drive, re-derive its page-per-product map,
+    and attach the page image to existing items that have no photo. For PDF
+    catalogs imported before PDF photos were supported — no re-import, no new
+    items, no re-classification. Idempotent: items that already have a photo are
+    skipped, so it's safe to re-run."""
+    from backend.services import catalog_import, google, pdf_render
+
+    have = set(db.scalars(
+        select(models.Document.catalog_item_id)
+        .where(models.Document.kind == "image", models.Document.catalog_item_id.is_not(None))
+    ).all())
+    attached = 0
+    files = 0
+    budget = 400  # cap pages rendered per run so one request can't run too long
+    fails: list[str] = []
+    for rec in db.scalars(select(models.ImportedFile)).all():
+        if budget <= 0:
+            break
+        if not (rec.filename or "").lower().endswith(".pdf"):
+            continue
+        data = None
+        for as_drive in (True, False):  # file_id is usually a Drive id, sometimes a Chat resource
+            try:
+                data = google.download_attachment(
+                    db, None if as_drive else rec.file_id, rec.file_id if as_drive else None)
+                break
+            except Exception:
+                data = None
+        if data is None:
+            fails.append(f"{rec.filename}: couldn't download")
+            continue
+        try:
+            res = catalog_import.parse_catalog_file(rec.filename, None, data)
+        except Exception:
+            continue
+        if not res.rows:
+            continue
+        # Resolve the supplier these items live under: the file's own Supplier
+        # column if it names one, else the filename stem (how it was imported).
+        named = {r.supplier_name for r in res.rows if r.supplier_name}
+        stem = (rec.filename or "").rsplit(".", 1)[0]
+        cand = (list(named)[0] if len(named) == 1 else stem).strip().lower()
+        sup = db.scalar(select(models.Supplier).where(func.lower(models.Supplier.name) == cand))
+        if sup is None and len(named) != 1:
+            sup = db.scalar(select(models.Supplier).where(func.lower(models.Supplier.name) == stem.strip().lower()))
+        if sup is None:
+            fails.append(f"{rec.filename}: supplier not found")
+            continue
+        by_sku, by_name = {}, {}
+        for it in db.scalars(select(models.CatalogItem).where(models.CatalogItem.supplier_id == sup.id)).all():
+            if it.sku:
+                by_sku[it.sku] = it
+            by_name[(it.name or "").strip().lower()] = it
+        rendered: dict[int, bytes] = {}
+        for r in res.rows:
+            sp = (r.attributes or {}).get("Source Page")
+            if not sp:
+                continue
+            it = (by_sku.get(r.sku) if r.sku else None) or by_name.get((r.name or "").strip().lower())
+            if it is None or it.id in have or budget <= 0:
+                continue
+            try:
+                idx = int(sp) - 1
+                jpeg = rendered.get(idx)
+                if jpeg is None:
+                    jpeg = rendered[idx] = pdf_render.render_page_jpeg(data, idx)
+            except Exception:
+                continue
+            db.add(store_file(jpeg, f"item-{it.id}.jpg", "image/jpeg",
+                              supplier_id=it.supplier_id, catalog_item_id=it.id, kind="image"))
+            have.add(it.id); attached += 1; budget -= 1
+        files += 1
+    db.commit()
+    return {"attached": attached, "files": files, "failed": fails[:20]}
+
+
 class MergeSuppliersIn(BaseModel):
     source_ids: list[int]            # suppliers to fold in (and then delete)
     target_id: int | None = None     # merge into this existing supplier, or…

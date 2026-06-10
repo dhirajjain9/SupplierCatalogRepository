@@ -2694,6 +2694,29 @@ document.getElementById("backfill-photos").addEventListener("click", () => {
   setSaveLabel("Attach photos");
 });
 
+// Re-fetch already-imported PDFs from Drive and attach each product's page image
+// (for PDF catalogs imported before PDF photos were supported, e.g. cast-iron).
+document.getElementById("backfill-pdf-photos").addEventListener("click", () => {
+  openModal("Re-attach PDF photos", [], async () => {
+    const fields = document.getElementById("modal-fields");
+    await new Promise((r) => setTimeout(r, 0));
+    const r = await api.post("/api/maintenance/backfill-pdf-photos", {});
+    fields.innerHTML = r.attached
+      ? `<p><strong>Attached photos to ${r.attached} product(s)</strong> across ${r.files} PDF(s). 🎉</p>`
+        + (r.failed && r.failed.length ? `<p class="muted">Skipped: ${r.failed.map(esc).join("; ")}</p>` : "")
+      : `<p>Nothing to attach — PDFs already have photos, aren't on Drive, or no match was found.</p>`
+        + (r.failed && r.failed.length ? `<p class="muted">${r.failed.map(esc).join("; ")}</p>` : "");
+    setSaveLabel("Done"); onSubmit = async () => {};
+    loadCatalog(); refreshCounts();
+    return false;
+  });
+  document.getElementById("modal-fields").innerHTML =
+    `<p>Re-fetch your imported PDF catalogs from Google Drive and attach each product's
+        page image — for PDFs imported before photos were supported. No re-import, no new
+        items; existing products just get their photo. This can take a moment per PDF.</p>`;
+  setSaveLabel("Re-attach photos");
+});
+
 // Clean up duplicate product photos (and surface duplicate suppliers) left by
 // repeated imports. Shows a report first, then removes only exact duplicates.
 document.getElementById("dedupe-images").addEventListener("click", () => {
