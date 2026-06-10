@@ -129,7 +129,7 @@ def _label_headers(headers: list) -> list[str]:
     return labels
 
 
-def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
+def normalize_rows(headers: list, raw_rows: list[list], row_pages: list[int] | None = None) -> ImportResult:
     """Map headers to canonical fields while preserving every row and column.
 
     Each non-empty row produces exactly one ``ParsedRow`` whose ``attributes``
@@ -137,6 +137,10 @@ def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
     parsed into typed fields; values that fail to parse are recorded as warnings
     but never cause the row (or the file) to be dropped. Row numbers in warnings
     are 1-based and count the header as row 1.
+
+    ``row_pages`` (PDF only) gives the source page per raw row; it's recorded as
+    a 'Source Page' attribute so the page image can be attached as the product's
+    photo on import.
     """
     result = ImportResult()
     labels = _label_headers(headers)
@@ -190,6 +194,8 @@ def normalize_rows(headers: list, raw_rows: list[list]) -> ImportResult:
                     {"row": row_no, "warning": f"Missing name; using {name!r}"}
                 )
 
+        if row_pages is not None and offset < len(row_pages) and row_pages[offset]:
+            attributes.setdefault("Source Page", str(row_pages[offset]))
         row = ParsedRow(name=name, attributes=attributes, source_row=row_no)
         row.sku = values.get("sku")
         row.unit = values.get("unit")
@@ -278,13 +284,13 @@ _PDF_TABLE_SETTINGS = (
 )
 
 
-def _parse_pdf(data: bytes) -> tuple[list, list[list]]:
+def _parse_pdf(data: bytes) -> tuple[list, list[list], list[int]]:
     """Best-effort extraction of tabular rows from a PDF.
 
     Scans every table on every page; the first table whose header row maps to a
     'name' column defines the headers, and subsequent matching tables contribute
-    data rows. Falls back from ruled-line detection to a text-alignment strategy
-    so both bordered and borderless catalog tables are handled.
+    data rows. Also returns, per data row, the 1-based PDF page it came from (so
+    each product's page image can be attached on import).
     """
     import pdfplumber
 
@@ -292,7 +298,8 @@ def _parse_pdf(data: bytes) -> tuple[list, list[list]]:
         for settings in _PDF_TABLE_SETTINGS:
             headers: list = []
             raw_rows: list[list] = []
-            for page in pdf.pages:
+            row_pages: list[int] = []
+            for page_index, page in enumerate(pdf.pages):
                 for table in page.extract_tables(settings) or []:
                     if not table:
                         continue
@@ -301,25 +308,27 @@ def _parse_pdf(data: bytes) -> tuple[list, list[list]]:
                         if not headers:
                             headers = head
                         raw_rows.extend(body)
+                        row_pages.extend([page_index + 1] * len(body))
             if headers:
-                return headers, raw_rows
-    return [], []
+                return headers, raw_rows, row_pages
+    return [], [], []
 
 
 def parse_catalog_file(filename: str, content_type: str | None, data: bytes) -> ImportResult:
     """Dispatch to the right parser based on file extension, then normalize."""
     name = (filename or "").lower()
+    row_pages: list[int] | None = None
     if name.endswith(".csv"):
         headers, rows = _parse_csv(data)
     elif name.endswith(".xlsx"):
         headers, rows = _parse_xlsx(data)
     elif name.endswith(".pdf"):
-        headers, rows = _parse_pdf(data)
+        headers, rows, row_pages = _parse_pdf(data)
     else:
         raise UnsupportedFileType(
             "Unsupported file type. Please upload a .csv, .xlsx or .pdf file."
         )
-    return normalize_rows(headers, rows)
+    return normalize_rows(headers, rows, row_pages)
 
 
 def template_csv() -> str:

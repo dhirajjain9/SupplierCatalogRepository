@@ -349,6 +349,38 @@ def _attach_xlsx_images(db: Session, filename: str | None, data: bytes,
     return attached
 
 
+def _attach_pdf_page_images(db: Session, filename: str | None, data: bytes,
+                            row_to_item: dict[int, models.CatalogItem]) -> int:
+    """For a PDF catalog, render each page that has products and attach it as the
+    photo of every item on that page (matched by the 'Source Page' attribute).
+    Text-table PDFs carry no per-product crop box, so the page image is the best
+    available photo. Returns the count of images attached."""
+    if not (filename or "").lower().endswith(".pdf"):
+        return 0
+    from backend.services import pdf_render
+
+    rendered: dict[int, bytes] = {}
+    attached = 0
+    for item in row_to_item.values():
+        sp = (item.attributes or {}).get("Source Page")
+        if not sp:
+            continue
+        try:
+            idx = int(sp) - 1
+        except (TypeError, ValueError):
+            continue
+        try:
+            jpeg = rendered.get(idx)
+            if jpeg is None:
+                jpeg = rendered[idx] = pdf_render.render_page_jpeg(data, idx)
+        except Exception:
+            continue
+        db.add(store_file(jpeg, f"item-{item.id}.jpg", "image/jpeg",
+                          supplier_id=item.supplier_id, catalog_item_id=item.id, kind="image"))
+        attached += 1
+    return attached
+
+
 def _run_catalog_import(
     db: Session, file: UploadFile, data: bytes, default_supplier: models.Supplier | None,
     suppliers_pre_created: int = 0,
@@ -358,6 +390,7 @@ def _run_catalog_import(
         db, result.rows, result.warnings, default_supplier, suppliers_pre_created
     )
     summary.images_attached += _attach_xlsx_images(db, file.filename, data, row_to_item)
+    summary.images_attached += _attach_pdf_page_images(db, file.filename, data, row_to_item)
     summary.images_attached += _attach_image_urls(db, row_to_item)
     db.commit()
     return summary
